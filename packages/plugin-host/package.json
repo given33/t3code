@@ -1,0 +1,20 @@
+{
+  "name": "@t3tools/plugin-host",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "test": "node --test src/host.test.ts",
+    "typecheck": "effect-tsgo tsrs --noEmit",
+    "build": "effect-tsgo tsrs --noEmit false --outDir dist"
+  },
+  "dependencies": {
+    "proper-lockfile": "4.1.2",
+    "tar": "7.5.22"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/proper-lockfile": "^4.1.4"
+  }
+}
