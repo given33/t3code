@@ -80,6 +80,7 @@ it.layer(nodeLayer)("DeepSeek Harness status", (it) => {
         checkDshProviderStatus(settings, f.environment);
       expect(yield* check({ ...f.settings, enabled: false })).toMatchObject({
         enabled: false,
+        reportsContextWindow: false,
         installed: false,
         status: "disabled",
         showInteractionModeToggle: false,
@@ -108,6 +109,7 @@ it.layer(nodeLayer)("DeepSeek Harness status", (it) => {
       const snapshot = yield* checkDshProviderStatus(f.settings, f.environment);
       expect(snapshot).toMatchObject({
         status: "ready",
+        reportsContextWindow: true,
         version: "0.2.3-alpha.2",
         nativeSessions: { canList: true, canResume: true, canDelete: false, canLoad: false },
         supportedRuntimeModes: ["approval-required", "full-access"],

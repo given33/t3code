@@ -23,6 +23,7 @@ export async function drive({
   extraPatch,
   syncLocalModels,
   profile,
+  mcpServers = [],
   allowPermission,
   onResponse,
   run,
@@ -124,8 +125,14 @@ export async function drive({
             ? { name: "t3-deepseek-harness-acp", version: "0.1.0-t3" }
             : { name: "deepseek-harness-acp", version: "0.0.1" },
         );
-        const { sessionId, configOptions } = await request("session/new", { cwd, mcpServers: [] });
-        const result = await run({ request, sessionId, configOptions, trace, label });
+        function notify(method, params) {
+          if (failure) throw failure;
+          const frame = { jsonrpc: "2.0", method, params };
+          child.stdin.write(JSON.stringify(frame) + "\n");
+          trace.push(frame);
+        }
+        const { sessionId, configOptions } = await request("session/new", { cwd, mcpServers });
+        const result = await run({ request, notify, sessionId, configOptions, trace, label });
         const listed = await request("session/list", { cwd });
         NodeAssert.deepEqual(listed.sessions, []);
         NodeAssert.deepEqual(await request("session/close", { sessionId }), {});

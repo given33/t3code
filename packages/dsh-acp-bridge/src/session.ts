@@ -289,8 +289,11 @@ export class AcpSession {
     if (!commands) return false;
     try {
       const execution = await commands.execute(this.agent, line, [], signal);
-      signal.throwIfAborted();
       if (!execution) return false;
+      // A command can commit an entire compaction outside a model turn.
+      // Deliver its queued lifecycle before acknowledging the command.
+      await this.outputTail;
+      signal.throwIfAborted();
       if (execution.result.text)
         await this.notify({
           sessionId: this.agent.session.id,
@@ -452,9 +455,12 @@ export class AcpSession {
         });
       } else if (event.type === "assistant/message") {
         const inflight = this.inflight?.turn === event.data.turn ? this.inflight : undefined;
+        const signal = this.inflight?.admissionController.signal;
         const previous = this.outputTail;
         const delivery = previous.then(async () => {
+          if (this.closing || signal?.aborted) return;
           for (const update of await assistantUpdates(this.ctx, session, event)) {
+            if (this.closing || signal?.aborted) return;
             await this.notify({ sessionId: this.agent.session.id, update });
           }
         });
@@ -466,16 +472,24 @@ export class AcpSession {
           );
         });
       } else if (
+        event.type === "compaction/start" ||
+        event.type === "compaction/summary" ||
+        event.type === "compaction/end" ||
+        event.type === "compaction/prune" ||
         event.type === "tool/call" ||
         event.type === "tool/result" ||
         event.type === "todo/write" ||
         event.type === "turn/start"
       ) {
+        // A committed compaction still changes context when its prompt is cancelled.
+        const signal = event.type.startsWith("compaction/")
+          ? undefined
+          : this.inflight?.admissionController.signal;
         this.outputTail = this.outputTail
           .then(async () => {
+            if (this.closing || signal?.aborted) return;
             const update = await this.activityUpdates.project(event);
-            if ((event.type === "turn/start" || event.type === "todo/write") && this.closing)
-              return;
+            if (!update || this.closing || signal?.aborted) return;
             await this.notify({ sessionId: session.id, update });
           })
           .catch((error: unknown) => {

@@ -61,6 +61,10 @@ export class SessionActivityUpdates {
     string,
     { name: string; args: unknown; definition: ToolDefinition }
   >();
+  // DSH permits only one open compaction. Retain just IDs after completion so
+  // replayed starts/ends cannot reopen a transaction or retain old summaries.
+  private readonly seenCompactions = new Set<string>();
+  private compacting: { id: string; summary?: ContentBlock[] } | undefined;
   private readonly warned = new Set<string>();
 
   constructor(
@@ -92,9 +96,23 @@ export class SessionActivityUpdates {
   }
 
   project(
-    event: SessionEvent<"tool/call" | "tool/result" | "todo/write" | "turn/start">,
-  ): SessionUpdate | Promise<SessionUpdate> {
+    event: SessionEvent<
+      | "tool/call"
+      | "tool/result"
+      | "todo/write"
+      | "turn/start"
+      | "compaction/start"
+      | "compaction/summary"
+      | "compaction/end"
+      | "compaction/prune"
+    >,
+  ): SessionUpdate | Promise<SessionUpdate | undefined> {
     switch (event.type) {
+      case "compaction/start":
+      case "compaction/summary":
+      case "compaction/end":
+      case "compaction/prune":
+        return this.compaction(event);
       case "tool/call":
         return this.call(event);
       case "tool/result":
@@ -104,6 +122,46 @@ export class SessionActivityUpdates {
       case "turn/start":
         this.pending.clear();
         return { sessionUpdate: "plan", entries: [] };
+    }
+  }
+
+  private async compaction(
+    event: SessionEvent<
+      "compaction/start" | "compaction/summary" | "compaction/end" | "compaction/prune"
+    >,
+  ): Promise<SessionUpdate | undefined> {
+    if (event.type === "compaction/prune") {
+      this.warnOnce("prune", "acp: compaction/prune has no ACP lifecycle update");
+      return;
+    }
+    const { compactionId } = event.data;
+    const frame = { sessionUpdate: "compaction_update", compactionId } as const;
+    if (event.type === "compaction/start") {
+      if (this.compacting || this.seenCompactions.has(compactionId)) return;
+      this.seenCompactions.add(compactionId);
+      this.compacting = { id: compactionId };
+      return { ...frame, status: "in_progress" };
+    }
+    if (this.compacting?.id !== compactionId) return;
+    if (event.type === "compaction/summary") {
+      this.compacting.summary ??= event.data.summary;
+      return;
+    }
+    const { summary } = this.compacting;
+    this.compacting = undefined;
+    // summary-error can recover and retry. Only end.error is terminal.
+    if (event.data.error !== undefined)
+      return { ...frame, status: "failed", error: event.data.error };
+    const completed = { ...frame, status: "completed" } as const;
+    if (!summary) return completed;
+    try {
+      const blocks = await Promise.all(summary.map((b) => assistantBlockToAcp(this.ctx, b)));
+      return { ...completed, summary: blocks.filter((b) => b !== undefined) };
+    } catch {
+      this.ctx.logger.warn(
+        "acp: could not convert compaction summary, sending completion without it",
+      );
+      return completed;
     }
   }
 

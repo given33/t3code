@@ -390,3 +390,80 @@ it("omits mode state and rejects writes when the optional permission service is 
   await expect(session.setMode("workspace-write")).rejects.toMatchObject({ code: -32602 });
   expect(notify).not.toHaveBeenCalled();
 });
+
+it("suppresses repeated, stale and closing compaction updates and warns once for pruning", async () => {
+  const { session, agent, notify, warn } = await setup();
+  const emit = (event: SessionEvent) => session.onSessionEvent(agent.session, event);
+  const start = (id: string) => emit({ type: "compaction/start", data: { compactionId: id } });
+  const end = (id: string, error?: string) =>
+    emit({ type: "compaction/end", data: { compactionId: id, ...(error && { error }) } });
+  const summary = (text: string) =>
+    emit({
+      type: "compaction/summary",
+      data: { compactionId: "a", summary: [{ type: "text", text }] },
+    });
+  emit({ type: "compaction/prune", data: {} });
+  emit({ type: "compaction/prune", data: {} });
+  start("a");
+  start("a");
+  end("other");
+  summary("retained");
+  summary("duplicate");
+  end("a");
+  end("a", "late failure");
+  start("b");
+  end("b", "summary failed");
+  start("a");
+  end("b");
+  await session.drainUpdates();
+  expect(warn.mock.calls.filter(([s]) => s.includes("compaction/prune"))).toHaveLength(1);
+  const frames = notify.mock.calls.map(([{ update }]) => update);
+  expect(frames).toEqual([
+    { sessionUpdate: "compaction_update", compactionId: "a", status: "in_progress" },
+    {
+      sessionUpdate: "compaction_update",
+      compactionId: "a",
+      status: "completed",
+      summary: [{ type: "text", text: "retained" }],
+    },
+    { sessionUpdate: "compaction_update", compactionId: "b", status: "in_progress" },
+    {
+      sessionUpdate: "compaction_update",
+      compactionId: "b",
+      status: "failed",
+      error: "summary failed",
+    },
+  ]);
+  start("queued");
+  const closing = session.close("closing");
+  end("queued");
+  await closing;
+  expect(notify).toHaveBeenCalledTimes(4);
+});
+
+it("discards queued assistant and tool updates when the owning prompt is cancelled", async () => {
+  const { session, agent, notify } = await setup();
+  const claimed = Promise.withResolvers<void>();
+  vi.mocked(agent.followup).mockImplementation((message) => {
+    session.onInboxClaimed(message, 1);
+    claimed.resolve();
+  });
+  const pending = session.prompt(
+    { sessionId: "test", prompt: [{ type: "text", text: "wait" }] },
+    false,
+  );
+  await claimed.promise;
+  session.onSessionEvent(agent.session, {
+    type: "assistant/message",
+    data: { turn: 1, message: { id: "old", content: [{ type: "text", text: "late" }] } },
+  });
+  session.onSessionEvent(agent.session, toolCall());
+  session.cancel();
+  session.onSessionEvent(agent.session, {
+    type: "tool/result",
+    data: { message: { toolCallId: "call", content: [] } },
+  });
+  await expect(pending).resolves.toEqual({ stopReason: "cancelled" });
+  await session.drainUpdates();
+  expect(notify).not.toHaveBeenCalled();
+});

@@ -69,6 +69,10 @@ export interface Session {
   seq: number;
 }
 interface EventData {
+  "compaction/start": { compactionId: string };
+  "compaction/summary": { compactionId: string; summary: ContentBlock[] };
+  "compaction/end": { compactionId: string; error?: string };
+  "compaction/prune": unknown;
   "permission/preset": { preset: string };
   "sandbox/mode": unknown;
   "approval/policy": unknown;
@@ -279,6 +283,13 @@ export type SessionUpdate =
       entries: { content: string; status: PlanStatus; priority: "medium" }[];
     }
   | { sessionUpdate: "current_mode_update"; currentModeId: string }
+  | {
+      sessionUpdate: "compaction_update";
+      compactionId: string;
+      status: "in_progress" | "completed" | "failed";
+      summary?: AcpContentBlock[];
+      error?: string;
+    }
   | { sessionUpdate: "usage_update"; used: number; size: number }
   | { sessionUpdate: "config_option_update"; configOptions: SessionConfigOption[] };
 export interface SessionNotification {

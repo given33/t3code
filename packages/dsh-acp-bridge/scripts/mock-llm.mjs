@@ -14,7 +14,13 @@ export const toolArgs = {
 };
 export const answer = "Offline stream verified.";
 
-export async function offlineProfile(root, bridgeEnabled, mock, extraPatch = []) {
+export async function offlineProfile(
+  root,
+  bridgeEnabled,
+  mock,
+  extraPatch = [],
+  modelOptions = {},
+) {
   const home = NodePath.join(root, bridgeEnabled ? "t3" : "official");
   const profile = NodePath.join(home, "profiles", "acp");
   await NodeFSP.mkdir(profile, { recursive: true });
@@ -33,7 +39,7 @@ export async function offlineProfile(root, bridgeEnabled, mock, extraPatch = [])
                 api: "openai-responses",
                 apiKeyEnv: "T3_OFFLINE_KEY",
                 baseURL: mock.url,
-                models: [{ id: modelId, name: "Offline" }],
+                models: [{ id: modelId, name: "Offline", ...modelOptions }],
               },
             },
           },
@@ -55,7 +61,13 @@ export async function offlineProfile(root, bridgeEnabled, mock, extraPatch = [])
   return { variables, route };
 }
 
-export async function startMock({ textOnly = false, onModelInput, toolCalls } = {}) {
+export async function startMock({
+  textOnly = false,
+  onModelInput,
+  toolCalls,
+  onTextStart,
+  maxTextRequests = 3,
+} = {}) {
   const seen = new Map([
     ["Bearer offline-t3", []],
     ["Bearer offline-official", []],
@@ -93,7 +105,7 @@ export async function startMock({ textOnly = false, onModelInput, toolCalls } = 
       const replyWithText = !call;
       requests.push(replyWithText ? "text" : "tool");
       NodeAssert.ok(
-        requests.length <= (textOnly ? 3 : calls.length + 1),
+        requests.length <= (textOnly ? maxTextRequests : calls.length + 1),
         "Unexpected additional model request",
       );
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
@@ -127,6 +139,10 @@ export async function startMock({ textOnly = false, onModelInput, toolCalls } = 
       if (replyWithText) {
         const content = { type: "output_text", text: "", annotations: [] };
         send("response.content_part.added", { ...fields, content_index: 0, part: content });
+        if (onTextStart) {
+          await onTextStart({ step, res });
+          if (res.destroyed) return;
+        }
         for (const delta of ["Offline stream ", "verified."]) {
           send("response.output_text.delta", { ...fields, content_index: 0, delta });
           await NodeTimersPromises.setImmediate();

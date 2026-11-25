@@ -8,6 +8,8 @@
     "build": "vp pack && node --experimental-vm-modules=true scripts/check-imports.mjs",
     "prepare": "vp pack && node --experimental-vm-modules=true scripts/check-imports.mjs",
     "test": "vp test run --config ../../vite.config.ts --dir .",
+    "test:cancel": "node scripts/cancel.mjs",
+    "test:mcp": "node scripts/mcp.mjs",
     "test:tools": "node scripts/tools.mjs",
     "test:modes": "node scripts/modes.mjs",
     "test:commands": "node scripts/commands.mjs",

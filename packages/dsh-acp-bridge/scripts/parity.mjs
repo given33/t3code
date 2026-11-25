@@ -1,4 +1,5 @@
 import * as NodeAssert from "node:assert/strict";
+import { checkCompaction } from "./compaction.mjs";
 import { checkOfflineParity } from "./e2e-offline.mjs";
 import { drive, normalize, withWorkspace } from "./drive.mjs";
 
@@ -35,6 +36,8 @@ async function runSide(bridgeEnabled, cwd) {
         `session/prompt stopReason=${response.stopReason}, expected end_turn`,
       );
       const updates = trace.slice(start).filter((m) => m.method === "session/update");
+      for (const frame of updates.filter((m) => m.params.update.sessionUpdate === "usage_update"))
+        console.log(`${label} ${JSON.stringify(frame)}`);
       const answer = updates
         .map((m) => m.params.update)
         .filter((u) => u.sessionUpdate === "agent_message_chunk" && u.content?.type === "text")
@@ -106,6 +109,10 @@ async function main() {
   );
   console.log(sequence.join(" "));
   await checkOfflineParity();
+  await checkCompaction();
+  console.log(
+    "expected: only T3 sends compaction_update for a durable DSH compaction; official sends none.",
+  );
 }
 
 await main();
