@@ -22,6 +22,7 @@ const ids = [JSON.stringify(["alpha", "sample"]), JSON.stringify(["beta", "sampl
 let model = ids[0];
 let effort = "";
 let pending;
+let promptCount = 0;
 const presetIds = ["read-only", "workspace-write", "danger-full-access"];
 if (process.env.DSH_TEST_CASE === "modes-auto") presetIds.push("auto");
 let currentModeId = "read-only";
@@ -58,6 +59,14 @@ for await (const line of NodeReadline.createInterface({ input: process.stdin }))
   log({
     method,
     ...(method === "session/prompt" && { compact: params.prompt[0]?.text === "/compact" }),
+    ...(method === "session/prompt" &&
+      process.env.DSH_TEST_CASE === "instruction-delivery" && {
+        instructionMarkers: params.prompt.flatMap((block) =>
+          block.type === "text"
+            ? (block.text.match(/<t3_code_instructions>|## T3 Code orchestration/g) ?? [])
+            : [],
+        ),
+      }),
     ...(params?.cwd && { cwd: params.cwd }),
     ...(params?.cursor && { cursor: params.cursor }),
     ...(params?.mcpServers && { mcpTypes: params.mcpServers.map((s) => s.type) }),
@@ -161,6 +170,19 @@ for await (const line of NodeReadline.createInterface({ input: process.stdin }))
       send({ id, result: {} });
       break;
     case "session/prompt":
+      if (process.env.DSH_TEST_CASE === "instruction-delivery" && ++promptCount === 2) {
+        send({
+          method: "session/update",
+          params: {
+            sessionId: params.sessionId,
+            update: {
+              sessionUpdate: "compaction_update",
+              compactionId: "compact-1",
+              status: "completed",
+            },
+          },
+        });
+      }
       if (params.prompt[0]?.text === "wait") pending = id;
       else if (params.prompt[0]?.text === "limit")
         send({ id, error: { code: -32000, message: "rate_limit: HTTP 429" } });

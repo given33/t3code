@@ -24,7 +24,10 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
-import { ProviderAdapterV2RuntimePolicy } from "@t3tools/provider-core/server/ProviderAdapter";
+import {
+  ProviderAdapterV2RuntimePolicy,
+  type ProviderAdapterV2TurnInput,
+} from "@t3tools/provider-core/server/ProviderAdapter";
 import * as Layer from "effect/Layer";
 import { DshDriver } from "./driver.ts";
 import { fixture, nodeLayer } from "./testing/fixture.ts";
@@ -58,7 +61,112 @@ const create = Effect.fn(function* (
   return { ...f, instance, manage };
 });
 
+const turnInput = Effect.fn(function* (
+  {
+    threadId,
+    modelSelection,
+    runtimePolicy,
+    providerThread,
+  }: Pick<
+    ProviderAdapterV2TurnInput,
+    "threadId" | "modelSelection" | "runtimePolicy" | "providerThread"
+  >,
+  ordinal: number,
+  text: string,
+) {
+  const now = yield* DateTime.now;
+  return {
+    threadId,
+    modelSelection,
+    runtimePolicy,
+    providerThread,
+    runOrdinal: ordinal,
+    providerTurnOrdinal: ordinal,
+    rootNodeId: NodeId.make(`root-${ordinal}`),
+    runId: RunId.make(`run-${ordinal}`),
+    attemptId: RunAttemptId.make(`attempt-${ordinal}`),
+    message: {
+      text,
+      attachments: [],
+      createdBy: "user",
+      creationSource: "web",
+      messageId: MessageId.make(`message-${ordinal}`),
+    },
+    appThread: {
+      id: threadId,
+      projectId: ProjectId.make("project"),
+      title: "DSH test thread",
+      createdBy: "user",
+      creationSource: "web",
+      providerInstanceId: modelSelection.instanceId,
+      modelSelection,
+      runtimeMode: runtimePolicy.runtimeMode,
+      interactionMode: runtimePolicy.interactionMode,
+      branch: null,
+      worktreePath: null,
+      activeProviderThreadId: providerThread.id,
+      lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+      forkedFrom: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
+      lastVisitedAt: null,
+      deletedAt: null,
+    },
+  } satisfies ProviderAdapterV2TurnInput;
+});
+
 it.layer(driverLayer)("DshDriver", (it) => {
+  it.effect(
+    "sends orchestration instructions on the first turn and again only after completed compaction",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* create("instruction-delivery", "instruction-delivery");
+        const instanceId = f.instance.instanceId;
+        const threadId = ThreadId.make("instruction-delivery");
+        const providerSessionId = ProviderSessionId.make("instruction-delivery");
+        yield* (yield* McpProviderSessions.McpProviderSessions).set({
+          environmentId: EnvironmentId.make("test"),
+          threadId,
+          providerSessionId,
+          providerInstanceId: instanceId,
+          endpoint: "http://127.0.0.1:1/mcp",
+          authorizationHeader: "fixture",
+          browserToolsAvailable: false,
+        });
+        const modelSelection = { instanceId, model: "default" };
+        const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          cwd: f.directory,
+        });
+        const setup = { threadId, modelSelection, runtimePolicy };
+        const session = yield* f.instance.orchestrationAdapter.openSession({
+          ...setup,
+          providerSessionId,
+        });
+        const providerThread = yield* session.ensureThread(setup);
+        for (const ordinal of [1, 2, 3]) {
+          yield* session.startTurn(
+            yield* turnInput({ ...setup, providerThread }, ordinal, `Ordinary turn ${ordinal}`),
+          );
+          yield* session.events.pipe(
+            Stream.takeUntil((event) => event.type === "turn.terminal"),
+            Stream.runDrain,
+          );
+        }
+        const log = yield* f.log;
+        expect(log.filter((e) => e.method === "session/new").map((e) => e.mcpTypes)).toEqual([
+          ["http"],
+        ]);
+        const markers = ["<t3_code_instructions>", "## T3 Code orchestration"];
+        expect(
+          log.filter((e) => e.method === "session/prompt").map((e) => e.instructionMarkers),
+        ).toEqual([markers, [], markers]);
+      }),
+  );
   it.effect.each([
     ["modes", "approval-required", "workspace-write"],
     ["modes", "auto-accept-edits", "workspace-write"],
@@ -214,48 +322,9 @@ it.layer(driverLayer)("DshDriver", (it) => {
         expect(after.skills.some((s) => s.name === "disk-only")).toBe(true);
         expect((yield* workspace(path.dirname(f.directory))).slashCommandsPending).toBe(true);
         if (!session.compactThread) throw new Error("missing compact action");
-        const now = yield* DateTime.now;
-        const compact = session.compactThread({
-          threadId,
-          modelSelection,
-          runtimePolicy,
-          providerThread,
-          runOrdinal: 1,
-          providerTurnOrdinal: 1,
-          rootNodeId: NodeId.make("root"),
-          runId: RunId.make("run"),
-          attemptId: RunAttemptId.make("attempt"),
-          message: {
-            text: "",
-            attachments: [],
-            createdBy: "user",
-            creationSource: "web",
-            messageId: MessageId.make("message"),
-          },
-          appThread: {
-            id: threadId,
-            projectId: ProjectId.make("project"),
-            title: "DSH compact",
-            createdBy: "user",
-            creationSource: "web",
-            providerInstanceId: instanceId,
-            modelSelection,
-            runtimeMode: "approval-required",
-            interactionMode: "default",
-            branch: null,
-            worktreePath: null,
-            activeProviderThreadId: providerThread.id,
-            lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
-            forkedFrom: null,
-            createdAt: now,
-            updatedAt: now,
-            archivedAt: null,
-            settledOverride: null,
-            settledAt: null,
-            lastVisitedAt: null,
-            deletedAt: null,
-          },
-        });
+        const compact = session.compactThread(
+          yield* turnInput({ threadId, modelSelection, runtimePolicy, providerThread }, 1, ""),
+        );
         if (allowed) {
           yield* compact;
           yield* session.events.pipe(

@@ -3,6 +3,7 @@ import * as NodePath from "node:path";
 import * as NodeFSP from "node:fs/promises";
 import { drive, withWorkspace } from "./drive.mjs";
 import { answer, modelId, offlineProfile, startMock } from "./mock-llm.mjs";
+import { checkRawInstructions } from "./raw-instructions.mjs";
 
 const size = 123456;
 
@@ -114,5 +115,6 @@ async function runSide(cwd, bridgeEnabled) {
 export async function checkCompaction() {
   for (const bridgeEnabled of [true, false])
     await withWorkspace((cwd) => runSide(cwd, bridgeEnabled));
+  await checkRawInstructions();
 }
 if (import.meta.main) await checkCompaction();
