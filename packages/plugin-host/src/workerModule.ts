@@ -13,6 +13,13 @@ const ctx = { ...context, getServerInfo: () => ({...info}),
     port1.once('message', ({session, error}) => { port1.close(); if (error) reject(new Error(error)); else resolve(session); });
     port.postMessage({ session: true, options, port: port2 }, [port2]);
   }),
+  ...(workerData.hasOrchestration ? { orchestration: Object.fromEntries(
+    ['getThreadSnapshot','interruptActiveTurn','continueThreadTurn'].map(method => [method, (...args) => new Promise((resolve, reject) => {
+      const { port1, port2 } = new MessageChannel();
+      port1.once('message', ({ value, error }) => { port1.close(); if (error) reject(new Error(error)); else resolve(value); });
+      port.postMessage({ orchestration: method, args, port: port2 }, [port2]);
+    })])
+  ) } : {}),
   registerHttpHandler: (fn) => register(handlers, fn), onShutdown: (fn) => register(cleanups, fn)
 };
 port.on('message', async ({id, op, input}) => {

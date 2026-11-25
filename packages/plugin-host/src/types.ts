@@ -43,6 +43,48 @@ export interface LocalSession {
   token: string;
   expiresAt?: string;
 }
+export interface PluginThreadSnapshot {
+  threadId: string;
+  projectId: string;
+  workspacePath: string;
+  title: string;
+  activeRunId: string | null;
+  isRunning: boolean;
+  latestTurnSummary: string;
+  unknownSideEffects: boolean;
+  modelSelection: { readonly instanceId: string; readonly model: string };
+  updatedAt: string;
+}
+export interface PluginContinuation {
+  handoffId: string;
+  threadId?: string;
+  projectId?: string;
+  workspacePath?: string;
+  title?: string;
+  prompt: string;
+  sourceRole?: string;
+  sourceRevision?: string | null;
+  unknownSideEffects?: boolean;
+}
+export interface PluginOrchestration {
+  getThreadSnapshot(threadId: string): Promise<PluginThreadSnapshot | null>;
+  interruptActiveTurn(
+    threadId: string,
+    reason?: string,
+  ): Promise<{
+    interrupted: boolean;
+    activeRunId: string | null;
+  }>;
+  continueThreadTurn(input: PluginContinuation): Promise<{
+    ok: true;
+    threadId: string;
+    projectId: string;
+    environmentId: string;
+    route: string;
+    created: boolean;
+    dispatched: boolean;
+  }>;
+}
 export type Cleanup = () => void | Promise<void>;
 export interface PluginHostContext {
   pluginId: string;
@@ -50,6 +92,7 @@ export interface PluginHostContext {
   t3StateDir: string;
   t3BaseDir: string;
   staticDir: string | undefined;
+  orchestration?: PluginOrchestration;
   logger: Pick<Console, "info" | "warn" | "error">;
   getServerInfo(): ServerInfo;
   issueLocalSession(options?: SessionOptions): Promise<LocalSession | null>;

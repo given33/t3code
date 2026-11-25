@@ -239,3 +239,42 @@ NodeTest.test(
     }
   },
 );
+
+NodeTest.test(
+  "worker uses explicit orchestration methods, including fencing during cleanup",
+  async (t) => {
+    const { options, source } = await fixture(
+      t,
+      `export function apply(ctx) {
+    ctx.registerHttpHandler(async () => Response.json(await ctx.orchestration.getThreadSnapshot("thread")));
+    ctx.onShutdown(async () => { await ctx.orchestration.interruptActiveTurn("thread", "shutdown"); });
+  }`,
+    );
+    const calls: string[] = [];
+    const host = new PluginHostManager({
+      ...options,
+      orchestration: () => ({
+        getThreadSnapshot: async (id) => {
+          calls.push(id);
+          return null;
+        },
+        interruptActiveTurn: async (id, reason) => {
+          calls.push(id + ":" + reason);
+          return { interrupted: false, activeRunId: null };
+        },
+        continueThreadTurn: async () => {
+          throw Error("unexpected");
+        },
+      }),
+    });
+    try {
+      await host.installPlugin({ spec: source });
+      const r = await host.dispatchExtensionHttp("fixture", new Request("http://localhost/"), "/");
+      NodeAssert.equal(r.status, 200);
+      NodeAssert.equal(await r.json(), null);
+    } finally {
+      await host.disposeAll();
+    }
+    NodeAssert.deepEqual(calls, ["thread", "thread:shutdown"]);
+  },
+);

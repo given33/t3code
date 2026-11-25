@@ -10,6 +10,7 @@ import type {
   Config,
   InstallOptions,
   PluginHostContext,
+  PluginOrchestration,
   PluginRecord,
   PluginView,
   ServerInfo,
@@ -25,6 +26,7 @@ interface HostOptions {
   staticDir?: string | undefined;
   getServerInfo(): ServerInfo;
   issueLocalSession(id: string, options?: SessionOptions): Promise<LocalSession | null>;
+  orchestration?(id: string): PluginOrchestration;
   releaseSessions?(id: string): Promise<void>;
 }
 interface Reply {
@@ -47,6 +49,7 @@ class Instance {
   attach(
     worker: NodeWorkerThreads.Worker,
     issue: PluginHostContext["issueLocalSession"],
+    orchestration: PluginOrchestration | undefined,
     failed: (error: string) => void,
   ) {
     this.worker = worker;
@@ -57,6 +60,28 @@ class Instance {
           .then(
             (session) => msg.port.postMessage({ session }, []),
             () => msg.port.postMessage({ error: "Session issuance failed" }, []),
+          )
+          .finally(() => msg.port.close());
+      } else if (msg.orchestration && msg.port instanceof NodeWorkerThreads.MessagePort) {
+        // A stopping worker may still fence its source, but may not start a new turn.
+        const invoke = async () => {
+          if (!orchestration) throw new Error("Orchestration unavailable");
+          switch (msg.orchestration) {
+            case "getThreadSnapshot":
+              return orchestration.getThreadSnapshot(msg.args[0]);
+            case "interruptActiveTurn":
+              return orchestration.interruptActiveTurn(msg.args[0], msg.args[1]);
+            case "continueThreadTurn":
+              if (this.worker !== worker) throw new Error("Plugin stopped");
+              return orchestration.continueThreadTurn(msg.args[0]);
+            default:
+              throw new Error("Unknown orchestration method");
+          }
+        };
+        void invoke()
+          .then(
+            (value) => msg.port.postMessage({ value }),
+            () => msg.port.postMessage({ error: "Orchestration operation refused or failed" }),
           )
           .finally(() => msg.port.close());
       } else this.pending.get(msg.id)?.(msg.error, msg.value);
@@ -142,10 +167,12 @@ export class PluginHostManager {
       const stateDir = NodePath.join(this.registry.root, "state", row.id);
       await NodeFSP.mkdir(stateDir, { recursive: true, mode: 0o700 });
       const entry = `${NodeURL.pathToFileURL(data.entry).href}?v=${NodeCrypto.randomUUID()}`;
+      const orchestration = this.options.orchestration?.(row.id);
       instance.attach(
         new NodeWorkerThreads.Worker(workerModule, {
           workerData: {
             entry,
+            hasOrchestration: orchestration !== undefined,
             config: row.config,
             info: this.options.getServerInfo(),
             context: { pluginId: row.id, stateDir, t3StateDir, t3BaseDir, staticDir },
@@ -155,6 +182,7 @@ export class PluginHostManager {
           instance.worker && !this.closed
             ? this.options.issueLocalSession(row.id, options)
             : Promise.resolve(null),
+        orchestration,
         (error) => {
           fail(error);
           // The worker is already exiting. Do not wait for a message from it.
