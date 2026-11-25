@@ -2,6 +2,8 @@ import { describe, expect, it } from "@effect/vitest";
 import { ProviderInstanceId } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import type * as FileSystem from "effect/FileSystem";
+import type * as Path from "effect/Path";
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import type * as Acp from "effect-acp/compat";
@@ -71,6 +73,13 @@ it.layer(nodeLayer)("DeepSeek ACP adapter", (it) => {
         const instanceId = ProviderInstanceId.make("sample");
         const flavor = dshFlavor({
           ...f,
+          settings: {
+            ...f.settings,
+            customProviderId: "beta",
+            customProviderBaseUrl: "https://example.test/v1",
+            customModels: ["sample"],
+          },
+          services: yield* Effect.context<FileSystem.FileSystem | Path.Path>(),
           instanceId,
           selfInvocation: { command: "node", entrypoint: undefined },
         });
@@ -107,9 +116,9 @@ it.layer(nodeLayer)("DeepSeek ACP adapter", (it) => {
         const alpha = '["alpha","sample"]',
           beta = '["beta","sample"]';
         yield* select("default");
-        yield* select(beta, "_t3/empty");
+        yield* select("beta/sample", "_t3/empty");
         yield* select(beta, "low");
-        yield* select(beta, "high");
+        yield* select("sample", "high");
         yield* select("default");
         expect((yield* f.log).find((e) => e.method === "session/new")?.mcpTypes).toEqual(["http"]);
         expect((yield* f.log).filter((e) => e.configId).map((e) => [e.configId, e.value])).toEqual([

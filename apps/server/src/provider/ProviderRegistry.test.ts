@@ -1909,6 +1909,11 @@ it.layer(
               );
             }
           }).pipe(
+            Effect.provideService(HostProcess.Environment, {
+              PATH: "/bin",
+              SHELL: "/usr/bin/true",
+            }),
+            Effect.provideService(WindowsShellEnvironment, () => Effect.succeed({})),
             Effect.provide(
               ServerConfig.layerTest(process.cwd(), {
                 prefix: "t3-pi-model-cache-",
@@ -2860,21 +2865,6 @@ it.layer(
         }),
     );
 
-    // A login shell stand-in that prints the capture with one more PATH entry, as a profile edited
-    // after launch would.
-    const withLateLoginShell = <A, E, R>(effect: (shell: string) => Effect.Effect<A, E, R>) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-login-shell-" });
-        const shell = `${dir}/sh`;
-        yield* fs.writeFileString(
-          shell,
-          '#!/bin/sh\nPATH=/opt/late:/usr/bin exec /bin/sh -c "$2"\n',
-        );
-        yield* fs.chmod(shell, 0o755);
-        return yield* effect(shell);
-      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
-
     it.effect.each([
       {
         name: "Windows PATH",
@@ -2888,92 +2878,104 @@ it.layer(
         path: "/usr/bin",
         expectedPath: "/opt/late:/usr/bin",
       },
-    ])("rebuilds only instances missing their CLI when a refresh finds a new $name", (host) =>
-      withLateLoginShell((shell) => {
-        const env: NodeJS.ProcessEnv = { PATH: host.path, SHELL: shell };
-        return Effect.gen(function* () {
-          const driver = ProviderDriverKind.make("codex");
-          const makeInstance = (id: string, installed: boolean): ProviderInstance => {
-            const instanceId = ProviderInstanceId.make(id);
-            const provider = {
-              instanceId,
-              driver,
-              status: installed ? "ready" : "error",
-              enabled: true,
-              installed,
-              auth: { status: "unknown" },
-              checkedAt: "1970-01-01T00:00:00.000Z",
-              version: null,
-              models: [],
-              slashCommands: [],
-              skills: [],
-            } as const satisfies ServerProvider;
-            return {
-              instanceId,
-              driverKind: driver,
-              continuationIdentity: { driverKind: driver, continuationKey: `codex:${id}` },
-              displayName: undefined,
-              enabled: true,
-              snapshot: {
-                resolveMaintenance: () =>
-                  Effect.succeed(
-                    makeManualOnlyProviderMaintenanceCapabilities({
-                      provider: driver,
-                      packageName: null,
-                    }),
-                  ),
-                getSnapshot: Effect.succeed(provider),
-                refresh: Effect.succeed(provider),
-                streamChanges: Stream.empty,
-                applyUsageLimits: () => Effect.void,
-              },
-              orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-              textGeneration: {} as ProviderInstance["textGeneration"],
-            };
+    ])("rebuilds only instances missing their CLI when a refresh finds a new $name", (host) => {
+      const shell = "/bin/sh";
+      const env: NodeJS.ProcessEnv = { PATH: host.path, SHELL: shell };
+      const loginShell = ChildProcessSpawner.make((command) =>
+        Effect.sync(() => {
+          assert(command._tag === "StandardCommand");
+          assert.strictEqual(command.command, shell);
+          assert.strictEqual(command.args[0], "-ilc");
+          assert.include(command.args[1] ?? "", "__T3CODE_ENV_PATH_START__");
+          return mockHandle({
+            stdout: "__T3CODE_ENV_PATH_START__\n/opt/late:/usr/bin\n__T3CODE_ENV_PATH_END__\n",
+            stderr: "",
+            code: 0,
+          });
+        }),
+      );
+      return Effect.gen(function* () {
+        const driver = ProviderDriverKind.make("codex");
+        const makeInstance = (id: string, installed: boolean): ProviderInstance => {
+          const instanceId = ProviderInstanceId.make(id);
+          const provider = {
+            instanceId,
+            driver,
+            status: installed ? "ready" : "error",
+            enabled: true,
+            installed,
+            auth: { status: "unknown" },
+            checkedAt: "1970-01-01T00:00:00.000Z",
+            version: null,
+            models: [],
+            slashCommands: [],
+            skills: [],
+          } as const satisfies ServerProvider;
+          return {
+            instanceId,
+            driverKind: driver,
+            continuationIdentity: { driverKind: driver, continuationKey: `codex:${id}` },
+            displayName: undefined,
+            enabled: true,
+            snapshot: {
+              resolveMaintenance: () =>
+                Effect.succeed(
+                  makeManualOnlyProviderMaintenanceCapabilities({
+                    provider: driver,
+                    packageName: null,
+                  }),
+                ),
+              getSnapshot: Effect.succeed(provider),
+              refresh: Effect.succeed(provider),
+              streamChanges: Stream.empty,
+              applyUsageLimits: () => Effect.void,
+            },
+            orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+            textGeneration: {} as ProviderInstance["textGeneration"],
           };
-          const instances = [makeInstance("present", true), makeInstance("missing", false)];
-          const rebuilt: Array<ReadonlyArray<ProviderInstanceId>> = [];
-          const changes = yield* PubSub.unbounded<void>();
-          const registry = yield* ProviderRegistry.ProviderRegistry.pipe(
-            Effect.provide(
-              ProviderRegistry.layer.pipe(
-                Layer.provide(
-                  Layer.mock(ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator)({
-                    rebuild: (ids) => Effect.sync(() => void rebuilt.push(ids)),
-                  }),
-                ),
-                Layer.provideMerge(
-                  Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, {
-                    getInstance: (id) => Effect.succeed(instances.find((i) => i.instanceId === id)),
-                    listInstances: Effect.succeed(instances),
-                    listUnavailable: Effect.succeed([]),
-                    streamChanges: Stream.fromPubSub(changes),
-                    subscribeChanges: PubSub.subscribe(changes),
-                  }),
-                ),
-                Layer.provideMerge(
-                  ServerConfig.layerTest(process.cwd(), {
-                    prefix: "t3-provider-registry-path-",
-                  }),
-                ),
-                Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        };
+        const instances = [makeInstance("present", true), makeInstance("missing", false)];
+        const rebuilt: Array<ReadonlyArray<ProviderInstanceId>> = [];
+        const changes = yield* PubSub.unbounded<void>();
+        yield* ProviderRegistry.ProviderRegistry.pipe(
+          Effect.flatMap((registry) => registry.refresh()),
+          Effect.provide(
+            ProviderRegistry.layer.pipe(
+              Layer.provide(
+                Layer.mock(ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator)({
+                  rebuild: (ids) => Effect.sync(() => void rebuilt.push(ids)),
+                }),
               ),
+              Layer.provideMerge(
+                Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, {
+                  getInstance: (id) => Effect.succeed(instances.find((i) => i.instanceId === id)),
+                  listInstances: Effect.succeed(instances),
+                  listUnavailable: Effect.succeed([]),
+                  streamChanges: Stream.fromPubSub(changes),
+                  subscribeChanges: PubSub.subscribe(changes),
+                }),
+              ),
+              Layer.provideMerge(
+                ServerConfig.layerTest(process.cwd(), {
+                  prefix: "t3-provider-registry-path-",
+                }),
+              ),
+              Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, loginShell)),
+              Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
             ),
-          );
-
-          yield* registry.refresh();
-
-          assert.strictEqual(env.PATH, host.expectedPath);
-          assert.deepStrictEqual(rebuilt, [[ProviderInstanceId.make("missing")]]);
-        }).pipe(
-          Effect.provideService(HostProcess.Platform, host.platform),
-          Effect.provideService(HostProcess.Environment, env),
-          Effect.provideService(WindowsShellEnvironment, () =>
-            Effect.succeed({ PATH: "C:\\Windows;C:\\Tools" }),
           ),
         );
-      }),
-    );
+
+        assert.strictEqual(env.PATH, host.expectedPath);
+        assert.deepStrictEqual(rebuilt, [[ProviderInstanceId.make("missing")]]);
+      }).pipe(
+        Effect.provideService(HostProcess.Platform, host.platform),
+        Effect.provideService(HostProcess.Environment, env),
+        Effect.provideService(WindowsShellEnvironment, () =>
+          Effect.succeed({ PATH: "C:\\Windows;C:\\Tools" }),
+        ),
+      );
+    });
 
     it.effect("publishes a new label for an instance the registry kept live", () =>
       Effect.gen(function* () {
@@ -4557,22 +4559,25 @@ it.layer(
             ),
             Stream.filter((provider): provider is ServerProvider => provider !== undefined),
           );
-          const firstError = yield* Stream.toPull(
-            codexSnapshots.pipe(Stream.filter((provider) => provider.status === "error")),
-          );
+          // The registry stream has no replay: start the pull before triggering each transition.
+          const watchCodex = (predicate: (provider: ServerProvider) => boolean) =>
+            codexSnapshots.pipe(
+              Stream.filter(predicate),
+              Stream.toPull,
+              Effect.flatMap((pull) => Effect.forkScoped(pull, { startImmediately: true })),
+            );
+          const firstError = yield* watchCodex((provider) => provider.status === "error");
           const currentCodex = (yield* registry.getProviders).find(
             (provider) => provider.instanceId === "codex",
           );
           const initialCodex =
-            currentCodex?.status === "error" ? currentCodex : (yield* firstError)[0];
+            currentCodex?.status === "error" ? currentCodex : (yield* Fiber.join(firstError))[0];
           assert.strictEqual(initialCodex?.status, "error");
           assert.strictEqual(initialCodex?.installed, false);
           assert.deepStrictEqual(spawnedCommands, [firstMissing]);
 
-          const pendingRebuild = yield* Stream.toPull(
-            codexSnapshots.pipe(
-              Stream.filter((provider) => provider.status === "warning" && !provider.installed),
-            ),
+          const pendingRebuild = yield* watchCodex(
+            (provider) => provider.status === "warning" && !provider.installed,
           );
           yield* serverSettings.updateSettings({
             providerInstances: {
@@ -4587,12 +4592,10 @@ it.layer(
           yield* Deferred.succeed(allowLazySettingsStream, undefined);
 
           yield* Deferred.await(secondProbeStarted);
-          yield* pendingRebuild;
-          const rebuiltError = yield* Stream.toPull(
-            codexSnapshots.pipe(Stream.filter((provider) => provider.status === "error")),
-          );
+          yield* Fiber.join(pendingRebuild);
+          const rebuiltError = yield* watchCodex((provider) => provider.status === "error");
           yield* Deferred.succeed(releaseSecondProbe, undefined);
-          const [reprobedCodex] = yield* rebuiltError;
+          const [reprobedCodex] = yield* Fiber.join(rebuiltError);
           assert.deepStrictEqual(spawnedCommands, [firstMissing, secondMissing]);
           assert.strictEqual(reprobedCodex?.status, "error");
           assert.strictEqual(reprobedCodex?.installed, false);

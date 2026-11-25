@@ -20,6 +20,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import { AcpRequestError } from "effect-acp/errors";
 import type { DshSettings } from "../settings.ts";
 import { DSH_SUPPORTED_RUNTIME_MODES, makeDshAcpRuntime, resolveDshBinary } from "./acpSupport.ts";
+import { configuredDshModels } from "./localSync.ts";
 import { dshModels } from "./catalog.ts";
 
 const isRequestError = Schema.is(AcpRequestError);
@@ -70,9 +71,9 @@ const probeConfiguration = Effect.fn("Dsh.probeConfiguration")(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-dsh-acp-probe-" });
-  const patchPath = path.join(directory, "probe.json");
+  const probePatchPath = path.join(directory, "probe.json");
   yield* fs.writeFileString(
-    patchPath,
+    probePatchPath,
     yield* encodePatch([
       { id: "session-persistence-jsonl", config: { root: path.join(directory, "sessions") } },
       { id: "session-projection-cache", disabled: true },
@@ -81,7 +82,7 @@ const probeConfiguration = Effect.fn("Dsh.probeConfiguration")(function* (
   const runtime = yield* makeDshAcpRuntime({
     settings,
     environment,
-    patchPath,
+    probePatchPath,
     cwd: directory,
     mcpServers: [],
     clientInfo: { name: "t3-dsh-probe", version: "1" },
@@ -141,8 +142,24 @@ export const checkDshProviderStatus = Effect.fn("Dsh.checkStatus")(function* (
         ? "DeepSeek Harness was not found. Install the desktop app or configure Binary path."
         : "Could not verify `dsh --version`. Check that Binary path points to DeepSeek Harness, not the unrelated npm dsh package.",
     });
-  if (!discover)
-    return snapshot(settings, checkedAt, { auth, installed: true, version, status: "ready" });
+  if (!discover) {
+    const configured = yield* configuredDshModels(settings, env).pipe(Effect.result);
+    if (Result.isFailure(configured))
+      return snapshot(settings, checkedAt, {
+        auth,
+        installed: true,
+        version,
+        status: "warning",
+        message: isRequestError(configured.failure)
+          ? configured.failure.errorMessage
+          : "Could not read or sync the local DSH profile patch.",
+      });
+    return snapshot(
+      { ...settings, customModels: [...configured.success, ...settings.customModels] },
+      checkedAt,
+      { auth, installed: true, version, status: "ready" },
+    );
+  }
   const discovery = yield* probeConfiguration({ ...settings, binaryPath: binary }, env).pipe(
     Effect.timeout(resolveProviderProbeTimeoutMs("dsh", 20_000, env)),
     Effect.result,

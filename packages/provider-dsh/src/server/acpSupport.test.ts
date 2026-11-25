@@ -28,16 +28,45 @@ describe("DeepSeek CLI resolution", () => {
       const base = {
         deepseek_api_key: "ambient-test-value",
         DEEPSEEK_API_KEY: "also-ambient",
+        DEEPSEEK_CUSTOM_API_KEY: "ambient-default",
+        pixel_token: "ambient-custom",
         KEEP: "present",
       };
       const configure = (value?: string) =>
         dshEnvironment(
           value === undefined ? [] : [{ name: "DEEPSEEK_API_KEY", value, sensitive: true }],
+          "pixel_token",
         ).pipe(Effect.provideService(HostProcess.Environment, base));
       expect(yield* configure()).toEqual({ KEEP: "present" });
       expect(yield* configure("configured-test-value")).toEqual({
         KEEP: "present",
         DEEPSEEK_API_KEY: "configured-test-value",
+      });
+    }),
+  );
+  it.effect("preserves configured keys, but never strips core environment variables", () =>
+    Effect.gen(function* () {
+      const base = {
+        PATH: "bin",
+        HOME: "home",
+        LOCALAPPDATA: "local",
+        DEEPSEEK_CUSTOM_API_KEY: "discard",
+        SAMPLE_SECRET: "discard",
+      };
+      for (const key of ["PATH", "HOME", "LOCALAPPDATA"])
+        expect(
+          yield* dshEnvironment([], key).pipe(Effect.provideService(HostProcess.Environment, base)),
+        ).toHaveProperty(key, base[key as keyof typeof base]);
+      expect(
+        yield* dshEnvironment(
+          [{ name: "SAMPLE_SECRET", value: "for-instance", sensitive: true }],
+          "SAMPLE_SECRET",
+        ).pipe(Effect.provideService(HostProcess.Environment, base)),
+      ).toEqual({
+        PATH: "bin",
+        HOME: "home",
+        LOCALAPPDATA: "local",
+        SAMPLE_SECRET: "for-instance",
       });
     }),
   );

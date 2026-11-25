@@ -410,6 +410,34 @@ describe("EnvironmentProviderSettings routing", () => {
     await expect
       .element(screen.getByLabelText("Harness home", { exact: true }))
       .toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("switch", { name: "Sync local DSH models" }))
+      .toBeChecked();
+    await expect
+      .element(screen.getByRole("switch", { name: "Sync custom models to local DSH" }))
+      .not.toBeChecked();
+    await expect
+      .element(screen.getByLabelText("Custom provider ID", { exact: true }))
+      .toHaveAttribute("placeholder", "custom");
+    await expect
+      .element(screen.getByLabelText("Custom API base URL", { exact: true }))
+      .toHaveAttribute("placeholder", "https://api.example.com/v1");
+    await expect
+      .element(screen.getByLabelText("Custom API key env", { exact: true }))
+      .toHaveAttribute("placeholder", "DEEPSEEK_CUSTOM_API_KEY");
+    await expect
+      .element(screen.getByLabelText("Custom provider API key", { exact: true }))
+      .toBeInTheDocument();
+    await expect
+      .element(screen.getByLabelText("Role instructions directory", { exact: true }))
+      .toHaveAttribute("placeholder", "~/dsh-role");
+    const protocol = screen.getByRole("combobox", { name: "Custom API protocol" });
+    await expect.element(protocol).toHaveTextContent("OpenAI Responses");
+    await protocol.click();
+    await expect
+      .element(screen.getByRole("option", { name: "Anthropic Messages" }))
+      .toBeInTheDocument();
+    await screen.getByRole("option", { name: "OpenAI Chat Completions" }).click();
     const list = screen.getByRole("button", { name: "List sessions" });
     await expect.element(list).not.toBeInTheDocument();
     await setProviders([

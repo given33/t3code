@@ -23,6 +23,7 @@ import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEve
 import type * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { resolveSelfInvocation, type SelfInvocation } from "@t3tools/shared/nodeRuntime";
+import type * as Context from "effect/Context";
 import type * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
@@ -36,7 +37,7 @@ import {
   dshPermissionDisposition,
   makeDshAcpRuntime,
 } from "./acpSupport.ts";
-import { DSH_DEFAULT, modelOption } from "./catalog.ts";
+import { DSH_DEFAULT, modelOption, modelRoute, encodeRoute } from "./catalog.ts";
 import { DSH_PROVIDER } from "./status.ts";
 
 const isRequestError = Schema.is(AcpRequestError);
@@ -51,10 +52,16 @@ export const applyDshModelSelection = Effect.fn("Dsh.applyModelSelection")(funct
   runtime: Pick<AcpSessionRuntime["Service"], "getConfigOptions" | "setConfigOption">,
   selection: ModelSelection,
   profileDefault: string | undefined,
+  settings: Pick<DshSettings, "customProviderId" | "customProviderBaseUrl"> = {
+    customProviderId: "",
+    customProviderBaseUrl: "",
+  },
 ) {
   let config = yield* runtime.getConfigOptions;
   const model = modelOption(config);
-  const requested = selection.model === DSH_DEFAULT ? profileDefault : selection.model;
+  const route = modelRoute(selection.model, settings);
+  const requested =
+    selection.model === DSH_DEFAULT ? profileDefault : route ? encodeRoute(route) : selection.model;
   if (
     requested &&
     requested !== DSH_DEFAULT &&
@@ -102,7 +109,7 @@ interface DshAdapterV2Options {
   readonly selfInvocation: SelfInvocation;
   readonly nativeLogging?: Parameters<typeof makeAcpAdapterV2>[0]["nativeLogging"];
   readonly testHooks?: Parameters<typeof makeAcpAdapterV2>[0]["testHooks"];
-  readonly makeRuntime?: AcpAdapterV2Flavor["makeRuntime"];
+  readonly services: Context.Context<FileSystem.FileSystem | Path.Path>;
   readonly assertComplete?: AcpAdapterV2Flavor["assertComplete"];
   readonly onLiveConfiguration?: LiveConfiguration;
   readonly defaultModel?: Effect.Effect<string | undefined>;
@@ -113,14 +120,19 @@ export function dshFlavor(options: DshAdapterV2Options): AcpAdapterV2Flavor {
     driver: DSH_PROVIDER,
     runtimeHarness: "DeepSeek Harness",
     capabilities: DshProviderCapabilitiesV2,
-    makeRuntime:
-      options.makeRuntime ??
-      (({ processEnvironment, runtimePolicy: _policy, extraRoots: _extra, ...runtime }) =>
-        makeDshAcpRuntime({
-          ...runtime,
-          settings: options.settings,
-          environment: { ...options.environment, ...processEnvironment },
-        })),
+    makeRuntime: ({ processEnvironment, runtimePolicy: _policy, extraRoots: _extra, ...runtime }) =>
+      makeDshAcpRuntime({
+        ...runtime,
+        settings: options.settings,
+        environment: { ...options.environment, ...processEnvironment },
+      }).pipe(
+        Effect.provide(options.services),
+        Effect.mapError((e) =>
+          e._tag === "PlatformError"
+            ? AcpRequestError.invalidRequest("Could not prepare DSH runtime files.")
+            : e,
+        ),
+      ),
     mcpOverHttp: true,
     promptFailure: dshPromptFailure,
     permissionDisposition: dshPermissionDisposition,
@@ -130,7 +142,12 @@ export function dshFlavor(options: DshAdapterV2Options): AcpAdapterV2Flavor {
       const profileDefault =
         (yield* options.defaultModel ?? Effect.undefined) ??
         (initial?.type === "select" ? initial.currentValue : undefined);
-      return yield* applyDshModelSelection(runtime, modelSelection, profileDefault);
+      return yield* applyDshModelSelection(
+        runtime,
+        modelSelection,
+        profileDefault,
+        options.settings,
+      );
     }),
     ownedModelOptionIds: ["model", "reasoning_effort"],
     ...(options.onLiveConfiguration
@@ -170,9 +187,10 @@ export const makeDshAdapterV2Driver = (
       const logger = yield* makeAcpNativeLoggerFactory();
       return yield* makeDshAdapterV2({
         ...options,
+        services: yield* Effect.context<FileSystem.FileSystem | Path.Path>(),
         instanceId: input.instanceId,
         settings: { ...input.config, enabled: input.enabled },
-        environment: yield* dshEnvironment(input.environment),
+        environment: yield* dshEnvironment(input.environment, input.config.customProviderApiKeyEnv),
         selfInvocation: yield* resolveSelfInvocation(),
         nativeLogging: (threadId) =>
           logger({ nativeEventLogger: loggers.native, provider: DSH_PROVIDER, threadId }),

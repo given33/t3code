@@ -1,7 +1,7 @@
 import { ProviderDriverKind } from "@t3tools/contracts";
 import { defineProviderClient } from "@t3tools/provider-core/client";
 
-import { DshSettings } from "./settings.ts";
+import { DEFAULT_CUSTOM_KEY_ENV, DshSettings } from "./settings.ts";
 
 export const dshClient = defineProviderClient({
   driverKind: ProviderDriverKind.make("dsh"),
@@ -13,6 +13,12 @@ export const dshClient = defineProviderClient({
       name: "DEEPSEEK_API_KEY",
       label: "DeepSeek API key",
       description: "Optional. API key for the DeepSeek provider.",
+      sensitive: true,
+    },
+    {
+      name: DEFAULT_CUSTOM_KEY_ENV,
+      label: "Custom provider API key",
+      description: "Optional. API key for the provider configured with Custom API base URL.",
       sensitive: true,
     },
     {

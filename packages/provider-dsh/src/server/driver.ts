@@ -124,7 +124,7 @@ export const DshDriver: ProviderDriver<DshSettings, DshDriverEnv> = {
     const settings = { ...input.config, enabled };
     // Management calls and health checks run after create, with no host services in their caller.
     const services = yield* Effect.context<DshDriverEnv>();
-    const environment = yield* dshEnvironment(input.environment);
+    const environment = yield* dshEnvironment(input.environment, settings.customProviderApiKeyEnv);
     const continuationIdentity = defaultProviderContinuationIdentity({
       driverKind: DSH_PROVIDER,
       instanceId,
@@ -136,6 +136,8 @@ export const DshDriver: ProviderDriver<DshSettings, DshDriverEnv> = {
       accentColor,
       continuationGroupKey: continuationIdentity.continuationKey,
     });
+    // The instance registry recreates the driver on any runtime config change. Each fresh
+    // settings source, adapter and discovery cache belong to that exact configuration.
     const source = yield* makeProviderSnapshotSettingsSource(settings);
     const lastProbe = yield* Ref.make<ServerProviderDraft | undefined>(undefined);
     const live = yield* SubscriptionRef.make<ReadonlyArray<Acp.SessionConfigOption>>([]);
@@ -159,7 +161,14 @@ export const DshDriver: ProviderDriver<DshSettings, DshDriverEnv> = {
         const previous = yield* Ref.get(lastProbe);
         if (discover || !checked.version || previous?.version !== checked.version)
           yield* Ref.set(lastProbe, discover ? checked : undefined);
-        else if (previous) return stamp({ ...previous, checkedAt: checked.checkedAt });
+        else if (previous && checked.status === "ready") {
+          const known = new Set(previous.models.map((m) => m.slug));
+          return stamp({
+            ...previous,
+            checkedAt: checked.checkedAt,
+            models: [...previous.models, ...checked.models.filter((m) => !known.has(m.slug))],
+          });
+        }
         return stamp(checked);
       }),
       enrichSnapshot: ({ getSnapshot, publishSnapshot }) =>

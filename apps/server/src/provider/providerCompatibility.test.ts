@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { WindowsShellEnvironment } from "@t3tools/shared/shell";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -345,8 +346,9 @@ it.effect("a remote policy refresh preserves a newer health result on the regist
           ),
         ),
       ),
-      // A login shell that prints nothing, so the refresh never takes PATH from the developer's profile.
-      Effect.provideService(HostProcess.Environment, { ...process.env, SHELL: "/usr/bin/true" }),
+      // Keep PATH stable so the probe runs on the fixture instance, not a rebuilt CLI.
+      Effect.provideService(HostProcess.Environment, { PATH: "/bin", SHELL: "/usr/bin/true" }),
+      Effect.provideService(WindowsShellEnvironment, () => Effect.succeed({})),
     );
   }),
 );

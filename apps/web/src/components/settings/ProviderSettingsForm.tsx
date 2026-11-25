@@ -118,6 +118,36 @@ const PACKAGE_FIELD_TEXT: ReadonlyMap<string, string> = new Map([
     "Optional. API key for the DeepSeek provider.",
     msg("Optional. API key for the DeepSeek provider."),
   ],
+  ["Sync local DSH models", msg("Sync local DSH models")],
+  [
+    "Load custom LLM providers and models configured in local DeepSeek Harness profiles (desktop/web).",
+    msg(
+      "Load custom LLM providers and models configured in local DeepSeek Harness profiles (desktop/web).",
+    ),
+  ],
+  ["Custom provider ID", msg("Custom provider ID")],
+  ["Custom API base URL", msg("Custom API base URL")],
+  ["Custom API protocol", msg("Custom API protocol")],
+  ["Custom API key env", msg("Custom API key env")],
+  ["Sync custom models to local DSH", msg("Sync custom models to local DSH")],
+  [
+    "Write T3 custom provider and models into the local DeepSeek Harness profile patch so the CLI can reuse them.",
+    msg(
+      "Write T3 custom provider and models into the local DeepSeek Harness profile patch so the CLI can reuse them.",
+    ),
+  ],
+  ["Role instructions directory", msg("Role instructions directory")],
+  [
+    "Optional. Directory containing AGENTS.md loaded as global role instructions for this T3 DSH instance without altering standalone DSH Desktop.",
+    msg(
+      "Optional. Directory containing AGENTS.md loaded as global role instructions for this T3 DSH instance without altering standalone DSH Desktop.",
+    ),
+  ],
+  ["Custom provider API key", msg("Custom provider API key")],
+  [
+    "Optional. API key for the provider configured with Custom API base URL.",
+    msg("Optional. API key for the provider configured with Custom API base URL."),
+  ],
   ["Harness home", msg("Harness home")],
   [
     "Optional. Use a custom or isolated DeepSeek Harness home for this instance.",

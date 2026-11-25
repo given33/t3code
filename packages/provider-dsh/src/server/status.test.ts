@@ -23,6 +23,30 @@ it.layer(nodeLayer)("DeepSeek Harness status", (it) => {
         expect((yield* f.log).map((entry) => entry.method)).toEqual(["version"]);
       }),
   );
+  it.effect(
+    "shows locally configured models on passive refresh without launching hooks or writing a profile",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const desktop = path.join(f.directory, "profiles", "desktop");
+        yield* fs.makeDirectory(desktop, { recursive: true });
+        yield* fs.writeFileString(
+          path.join(desktop, "cordis.patch.yml"),
+          "- id: llm-pi-ai\n  config: {providers: {pixel: {models: [{id: flash, name: Pixel Flash}]}}}",
+        );
+        const snap = yield* checkDshProviderStatus(f.settings, f.environment, false);
+        expect(snap.models.map((m) => [m.slug, m.name])).toEqual([
+          ["default", "Harness default"],
+          ['["pixel","flash"]', "Pixel Flash"],
+        ]);
+        expect((yield* f.log).map((e) => e.method)).toEqual(["version"]);
+        expect(yield* fs.exists(path.join(f.directory, "profiles", f.settings.profile))).toBe(
+          false,
+        );
+      }),
+  );
   it.effect("does not spawn while disabled and distinguishes missing from broken version", () =>
     Effect.gen(function* () {
       const f = yield* fixture("bad-version");
@@ -102,6 +126,39 @@ it.layer(nodeLayer)("DeepSeek Harness status", (it) => {
       });
       expect(yield* (yield* FileSystem.FileSystem).exists(directory)).toBe(false);
     }),
+  );
+  it.effect(
+    "launches with the model overlay first and the isolated probe last, and removes both",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        const snapshot = yield* checkDshProviderStatus(
+          {
+            ...f.settings,
+            customProviderBaseUrl: "https://sample.example/v1",
+            customModels: ["sample"],
+          },
+          f.environment,
+        );
+        expect(snapshot.status).toBe("ready");
+        const launch = (yield* f.log).find((e) => e.method === "launch");
+        expect(launch?.args).toEqual([
+          "--profile",
+          "test-acp",
+          "--patch",
+          expect.stringContaining("t3-dsh-overlay.json"),
+          "--patch",
+          expect.stringContaining("probe.json"),
+        ]);
+        expect(launch?.patch).toMatchObject([
+          {
+            id: "llm-pi-ai",
+            config: { providers: { custom: { models: [{ id: "sample", name: "sample" }] } } },
+          },
+        ]);
+        const fs = yield* FileSystem.FileSystem;
+        for (const index of [3, 5]) expect(yield* fs.exists(launch!.args![index]!)).toBe(false);
+      }),
   );
   it.effect(
     "preserves the CLI version and default on a failed ACP bootstrap and removes the patch",

@@ -29,13 +29,17 @@ const driverLayer = TestProviderHost.layer({ runBackgroundWork: false }).pipe(
     ),
   ),
 );
-const create = Effect.fn(function* (name: string, scenario = "ok") {
+const create = Effect.fn(function* (
+  name: string,
+  scenario = "ok",
+  config: Partial<import("../settings.ts").DshSettings> = {},
+) {
   const f = yield* fixture(scenario);
   const instance = yield* DshDriver.create({
     instanceId: ProviderInstanceId.make(name),
     displayName: name,
     enabled: true,
-    config: { ...f.settings, profile: name },
+    config: { ...f.settings, profile: name, ...config },
     environment: [{ name: "DSH_HOME", value: f.directory, sensitive: false }],
   });
   const manage = instance.acpSessionManagement;
@@ -112,6 +116,13 @@ it.layer(driverLayer)("DshDriver", (it) => {
         enabled: false,
         binaryPath: "dsh",
         profile: "acp",
+        syncLocalModels: true,
+        customProviderId: "",
+        customProviderBaseUrl: "",
+        customProviderApi: "openai-responses",
+        customProviderApiKeyEnv: "DEEPSEEK_CUSTOM_API_KEY",
+        syncToLocalDsh: false,
+        instructionsHome: "",
         customModels: [],
       });
       const a = yield* create("profile-a");
@@ -181,6 +192,52 @@ it.layer(driverLayer)("DshDriver", (it) => {
           log.some((e) => e.method === "session/new" || e.patch || e.method === "session/delete"),
         ).toBe(false);
       }),
+  );
+  it.effect("uses the same instance model patch for live sessions and session listing", () =>
+    Effect.gen(function* () {
+      const f = yield* create("custom-list", "ok", {
+        customProviderBaseUrl: "https://sample.example/v1",
+        customModels: ["sample"],
+        customProviderId: "beta",
+      });
+      yield* f.manage.listSessions({ cwd: f.directory });
+      const threadId = ThreadId.make("dsh-overlay-thread");
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        cwd: f.directory,
+      });
+      const modelSelection = { instanceId: f.instance.instanceId, model: "sample" };
+      const session = yield* f.instance.orchestrationAdapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("dsh-overlay-session"),
+        modelSelection,
+        runtimePolicy,
+      });
+      yield* session.ensureThread({ threadId, modelSelection, runtimePolicy });
+      const log = yield* f.log;
+      const launches = log.filter((e) => e.method === "launch");
+      expect(launches).toHaveLength(2);
+      for (const launch of launches)
+        expect(launch.patch).toMatchObject([
+          {
+            id: "llm-pi-ai",
+            config: {
+              providers: {
+                beta: {
+                  baseURL: "https://sample.example/v1",
+                  models: [{ id: "sample", name: "sample" }],
+                },
+              },
+            },
+          },
+        ]);
+      expect(log).toContainEqual({
+        method: "session/set_config_option",
+        configId: "model",
+        value: '["beta","sample"]',
+      });
+    }),
   );
   it.effect("does not issue a list request to an agent missing the capability", () =>
     Effect.gen(function* () {
