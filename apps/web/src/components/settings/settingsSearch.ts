@@ -27,6 +27,7 @@ export type SettingsPath =
   | "/settings/diffs"
   | "/settings/keybindings"
   | "/settings/snap-shot"
+  | "/settings/plugins"
   | "/settings/providers"
   | "/settings/threads"
   | "/settings/browser"
@@ -105,6 +106,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/diffs": msg("Diffs & pull requests"),
   "/settings/keybindings": msg("Keybindings"),
   "/settings/snap-shot": msg("SnapShots"),
+  "/settings/plugins": msg("Plugins"),
   "/settings/providers": msg("Providers"),
   "/settings/threads": msg("Threads"),
   "/settings/browser": msg("Browser"),
@@ -156,6 +158,7 @@ const ALL_SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
     heading: msg("Agents"),
     paths: [
       "/settings/providers",
+      "/settings/plugins",
       "/settings/threads",
       "/settings/browser",
       "/settings/devices",
@@ -713,6 +716,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("sidebar inactivity days no activity automatically")],
     requiresThreadAutoSettlement: true,
     scope: "project-defaults",
+  },
+  {
+    id: "plugins",
+    title: msg("Install and manage plugins"),
+    to: "/settings/plugins",
+    scope: "environment",
+    searchTerms: [msg("extensions panels install uninstall configuration")],
   },
   {
     id: "compact-idle-threads",
@@ -1534,6 +1544,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/diffs": null,
   "/settings/snap-shot": null,
   "/settings/keybindings": null,
+  "/settings/plugins": "environment",
   "/settings/providers": null,
   "/settings/threads": null,
   "/settings/browser": null,
