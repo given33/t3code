@@ -132,7 +132,15 @@ vi.mock(import("../../state/session"), async (original) => {
 });
 vi.mock(import("../../state/entities"), async (original) => ({
   ...(await original()),
-  useProjects: (() => []) as never,
+  useProjects: (() => [
+    { id: "local", environmentId: "other-device", title: "Other project", workspaceRoot: "/other" },
+    {
+      id: "remote",
+      environmentId: "remote-device",
+      title: "Remote project",
+      workspaceRoot: "/remote",
+    },
+  ]) as never,
 }));
 vi.mock(import("./settingsLayout"), async (original) => ({
   ...(await original()),
@@ -381,6 +389,38 @@ describe("EnvironmentProviderSettings routing", () => {
       first,
       { ...second, name: "Entered B" },
     ]);
+  });
+
+  it("offers DSH session listing for the selected environment only after discovery", async () => {
+    await setup();
+    const instanceId = ProviderInstanceId.make("dsh-work");
+    const driver = ProviderDriverKind.make("dsh");
+    state.settings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: { [instanceId]: { driver, enabled: true } },
+    };
+    const passive = { ...provider(), driver, instanceId };
+    await setProviders([passive]);
+    await using screen = await render(panel({ targetInstanceId: instanceId }));
+    await expect.element(screen.getByLabelText("Binary path")).toBeInTheDocument();
+    await expect.element(screen.getByLabelText("Profile", { exact: true })).toBeInTheDocument();
+    await expect
+      .element(screen.getByLabelText("DeepSeek API key", { exact: true }))
+      .toBeInTheDocument();
+    await expect
+      .element(screen.getByLabelText("Harness home", { exact: true }))
+      .toBeInTheDocument();
+    const list = screen.getByRole("button", { name: "List sessions" });
+    await expect.element(list).not.toBeInTheDocument();
+    await setProviders([
+      { ...passive, nativeSessions: { canList: true, canLoad: false, canResume: true } },
+    ]);
+    await expect.element(list).toBeEnabled();
+    await expect
+      .element(screen.getByLabelText("Project for ACP sessions"))
+      .toHaveTextContent("Remote project");
+    await setProviders([passive]);
+    await expect.element(list).not.toBeInTheDocument();
   });
 
   it("routes explicit ACP browser authentication consent to the selected environment", async () => {

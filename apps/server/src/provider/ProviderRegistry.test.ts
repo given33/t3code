@@ -1372,6 +1372,119 @@ it.layer(
       );
     });
 
+    it.effect(
+      "retains cached DSH models on a passive ready probe and replaces them on discovery",
+      () =>
+        Effect.gen(function* () {
+          const instanceId = ProviderInstanceId.make("dsh-work");
+          const driver = ProviderDriverKind.make("dsh");
+          const model = (slug: string) => ({
+            slug,
+            name: slug,
+            isCustom: false,
+            capabilities: null,
+          });
+          const fallback = model("default");
+          const passive = {
+            instanceId,
+            driver,
+            enabled: true,
+            installed: true,
+            status: "ready",
+            auth: { status: "unknown" },
+            checkedAt: "2026-11-25T00:01:00Z",
+            version: "0.2.3-alpha.2",
+            models: [fallback],
+            slashCommands: [],
+            skills: [],
+          } satisfies ServerProvider;
+          const nativeSessions = { canList: true, canLoad: false, canResume: true };
+          const cached = {
+            ...passive,
+            checkedAt: "2026-11-25T00:00:00Z",
+            nativeSessions,
+            models: [fallback, model("retired")],
+          };
+          const discovered = {
+            ...passive,
+            checkedAt: "2026-11-25T00:02:00Z",
+            nativeSessions,
+            models: [fallback, model("current")],
+          };
+          const config = yield* ServerConfig.ServerConfig;
+          const filePath = yield* resolveProviderStatusCachePath({
+            cacheDir: config.providerStatusCacheDir,
+            instanceId,
+          });
+          yield* writeProviderStatusCache({ filePath, provider: cached });
+          const snapshot = yield* Ref.make<ServerProvider>(passive);
+          const instance = {
+            instanceId,
+            driverKind: driver,
+            displayName: undefined,
+            enabled: true,
+            continuationIdentity: { driverKind: driver, continuationKey: "dsh:instance:dsh-work" },
+            snapshot: {
+              getSnapshot: Ref.get(snapshot),
+              refresh: Ref.set(snapshot, discovered).pipe(Effect.as(discovered)),
+              streamChanges: Stream.empty,
+              applyUsageLimits: () => Effect.void,
+              resolveMaintenance: () =>
+                Effect.succeed(
+                  makeManualOnlyProviderMaintenanceCapabilities({
+                    provider: driver,
+                    packageName: null,
+                  }),
+                ),
+            },
+            orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+            textGeneration: {} as ProviderInstance["textGeneration"],
+          } satisfies ProviderInstance;
+          const instances = Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, {
+            getInstance: (id) => Effect.succeed(id === instanceId ? instance : undefined),
+            listInstances: Effect.succeed([instance]),
+            listUnavailable: Effect.succeed([]),
+            streamChanges: Stream.empty,
+            subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
+          });
+          yield* Effect.gen(function* () {
+            const registry = yield* ProviderRegistry.ProviderRegistry;
+            const [boot] = yield* registry.getProviders;
+            assert.strictEqual(boot?.checkedAt, passive.checkedAt);
+            assert.deepStrictEqual(boot?.models, cached.models);
+            assert.deepStrictEqual(
+              (yield* readProviderStatusCache(filePath))?.models,
+              cached.models,
+            );
+            const [refreshed] = yield* registry.refreshInstance(instanceId);
+            assert.deepStrictEqual(yield* Ref.get(snapshot), discovered);
+            assert.deepStrictEqual(refreshed?.models, discovered.models);
+            assert.deepStrictEqual(
+              (yield* readProviderStatusCache(filePath))?.models,
+              discovered.models,
+            );
+          }).pipe(
+            Effect.provide(
+              ProviderRegistry.layer.pipe(
+                Layer.provide(instances),
+                Layer.provide(layerUnusedMutator),
+              ),
+            ),
+          );
+        }).pipe(
+          Effect.provideService(HostProcess.Platform, "win32"),
+          Effect.provideService(HostProcess.Environment, { PATH: "C:\\Tools" }),
+          Effect.provideService(WindowsShellEnvironment, () =>
+            Effect.succeed({ PATH: "C:\\Tools" }),
+          ),
+          Effect.provide(
+            ServerConfig.layerTest(process.cwd(), { prefix: "t3-dsh-model-cache-" }).pipe(
+              Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+            ),
+          ),
+        ),
+    );
+
     it("retains ACP Registry models while discovery has not completed", () => {
       const previousProvider = {
         instanceId: ProviderInstanceId.make("acpRegistry_codex"),

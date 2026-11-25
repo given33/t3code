@@ -58,6 +58,7 @@ import type {
   ProviderEnvironmentField,
 } from "@t3tools/provider-core/client";
 import {
+  packageFieldText,
   deriveProviderSettingsFields,
   ProviderSettingsForm,
   reconcileRowsDraft,
@@ -299,13 +300,15 @@ function ProviderEnvironmentFieldRow(props: {
   readonly environmentId?: EnvironmentId | undefined;
 }) {
   const gt = useGT();
+  const resolve = useMessages();
+  const label = packageFieldText(props.field.label, resolve);
   const inputId = `${props.idPrefix}-environment-${props.field.name}`;
   const value = props.variable?.valueRedacted ? "" : (props.variable?.value ?? "");
 
   return (
     <SettingsRow
-      title={<label htmlFor={inputId}>{props.field.label}</label>}
-      description={props.field.description}
+      title={<label htmlFor={inputId}>{label}</label>}
+      description={props.field.description && packageFieldText(props.field.description, resolve)}
       managed={props.managedReason}
       control={
         <div className="flex w-full min-w-0 items-center gap-2 @min-[32rem]/settings-row:w-56">
@@ -330,7 +333,7 @@ function ProviderEnvironmentFieldRow(props: {
               placeholder={props.field.placeholder}
               configured={props.variable?.valueRedacted === true}
               spellCheck={false}
-              aria-label={props.field.label}
+              aria-label={label}
               sources={props.secretSources}
               environmentId={props.environmentId}
               onSecretChange={(secret) => props.onSecretChange(props.field, secret)}
@@ -342,7 +345,7 @@ function ProviderEnvironmentFieldRow(props: {
               size="icon-sm"
               variant="ghost-destructive"
               onClick={() => props.onRemove(props.field)}
-              aria-label={gt("Clear {field}", { field: props.field.label })}
+              aria-label={gt("Clear {field}", { field: label })}
             >
               <XIcon className="size-3.5" />
             </Button>
@@ -744,7 +747,6 @@ interface ProviderInstanceCardProps {
     | undefined;
 }
 
-const EMPTY_ACP_PROJECTS: NonNullable<ProviderInstanceCardProps["acpProjects"]> = [];
 const NO_SECRET_SOURCES: ReadonlyArray<SecretSource> = [];
 const NO_CUSTOM_MODELS: ReadonlyArray<CustomModelDefinition> = [];
 
@@ -804,7 +806,7 @@ export function ProviderInstanceCard({
   isUpdating = false,
   onAcceptUrlAuth,
   environmentId,
-  acpProjects = EMPTY_ACP_PROJECTS,
+  acpProjects,
   secretSources = NO_SECRET_SOURCES,
   projectOverride,
 }: ProviderInstanceCardProps) {
@@ -1474,7 +1476,7 @@ export function ProviderInstanceCard({
           />
         </div>
       </SettingsSection>
-      {environmentId !== undefined && liveProvider?.driver === "acpRegistry" ? (
+      {environmentId !== undefined && liveProvider !== undefined && acpProjects !== undefined ? (
         <AcpSessionManagementSection
           environmentId={environmentId}
           instanceId={instanceId}

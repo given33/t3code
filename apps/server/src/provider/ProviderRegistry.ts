@@ -211,8 +211,11 @@ const shouldRetainMissingProviderModels = (provider: ServerProvider): boolean =>
     );
   }
 
-  if (provider.driver === ProviderDriverKind.make("acpRegistry")) {
-    // Only completed ACP discovery provides nativeSessions and inventory; placeholder probes cannot establish auth for agents without sign-in.
+  if (
+    provider.driver === ProviderDriverKind.make("acpRegistry") ||
+    provider.driver === ProviderDriverKind.make("dsh")
+  ) {
+    // Only completed ACP discovery supplies nativeSessions and an authoritative model inventory.
     return !(
       provider.installed &&
       provider.status === "ready" &&

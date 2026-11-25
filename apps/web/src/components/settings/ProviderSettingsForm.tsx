@@ -104,6 +104,25 @@ function fieldAcceptsString(
 // also imports. Keyed by that English; text not listed here shows as authored.
 const PACKAGE_FIELD_TEXT: ReadonlyMap<string, string> = new Map([
   ["Binary path", msg("Binary path")],
+  ["Profile", msg("Profile")],
+  [
+    "Path to the DeepSeek Harness (dsh) CLI binary.",
+    msg("Path to the DeepSeek Harness (dsh) CLI binary."),
+  ],
+  [
+    "DeepSeek Harness profile to launch for ACP sessions.",
+    msg("DeepSeek Harness profile to launch for ACP sessions."),
+  ],
+  ["DeepSeek API key", msg("DeepSeek API key")],
+  [
+    "Optional. API key for the DeepSeek provider.",
+    msg("Optional. API key for the DeepSeek provider."),
+  ],
+  ["Harness home", msg("Harness home")],
+  [
+    "Optional. Use a custom or isolated DeepSeek Harness home for this instance.",
+    msg("Optional. Use a custom or isolated DeepSeek Harness home for this instance."),
+  ],
   ["CODEX_HOME path", msg("CODEX_HOME path")],
   ["Shadow home path", msg("Shadow home path")],
   ["Launch arguments", msg("Launch arguments")],
@@ -254,7 +273,7 @@ const PACKAGE_FIELD_TEXT: ReadonlyMap<string, string> = new Map([
   ["Local command", msg("Local command")],
 ]);
 
-function packageFieldText(text: string, resolve: MessageResolver): string {
+export function packageFieldText(text: string, resolve: MessageResolver): string {
   const entry = PACKAGE_FIELD_TEXT.get(text);
   return entry === undefined ? text : resolve(entry);
 }

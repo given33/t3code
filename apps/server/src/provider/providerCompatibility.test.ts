@@ -129,6 +129,21 @@ describe("provider compatibility", () => {
     );
   });
 
+  it("classifies stable and prerelease DSH versions only on hosts with DSH support", () => {
+    const policies = decodeCompatibilityPolicies(bundledManifest.compatibility);
+    const dsh = ProviderDriverKind.make("dsh");
+    for (const version of ["0.1.0", "0.2.3-alpha.2"]) {
+      const advisory = resolveProviderCompatibility(policies, dsh, version, "0.0.46");
+      assert.strictEqual(advisory?.status, "supported");
+      assert.strictEqual(advisory?.recommendedRange, ">=0.1.0");
+    }
+    assert.strictEqual(
+      resolveProviderCompatibility(policies, dsh, "0.0.9", "0.0.46")?.status,
+      "unknown",
+    );
+    assert.isUndefined(resolveProviderCompatibility(policies, dsh, "0.1.0", "0.0.45"));
+  });
+
   it("marks Antigravity below 1.5 broken and recommends 1.5.12 in the bundled manifest", () => {
     const policies = decodeCompatibilityPolicies(bundledManifest.compatibility);
     const antigravity = ProviderDriverKind.make("antigravity");

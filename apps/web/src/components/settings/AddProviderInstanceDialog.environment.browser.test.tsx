@@ -190,23 +190,26 @@ describe("AddProviderInstanceDialog environment routing", () => {
     });
   });
 
-  it("keeps fx and the ACP Registry under Show more", async () => {
+  it.each([
+    ["fx", "fx"],
+    ["dsh", "DeepSeek Harness"],
+  ])("creates %s from Show more without an ACP Registry sign-in", async (driver, label) => {
     setup();
     await using _screen = await render(dialog());
     expect(radio("Codex")).toBeDefined();
-    expect(radio("fx")).toBeUndefined();
+    expect(radio(label)).toBeUndefined();
     expect(document.body.textContent).not.toContain("Use Kilo Code");
 
     await click("Show more");
     button("Use Kilo Code");
-    await act(async () => radio("fx")!.click());
+    await act(async () => radio(label)!.click());
     await click("Next");
     await click("Next");
     await click("Add instance");
     expect(settingsHooks.mutate).toHaveBeenCalledWith({
       operation: "create",
-      instanceId: "fx",
-      instance: { driver: "fx", enabled: true, displayName: "fx" },
+      instanceId: driver,
+      instance: { driver, enabled: true, displayName: label },
     });
   });
 

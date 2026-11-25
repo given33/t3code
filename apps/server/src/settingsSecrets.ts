@@ -15,6 +15,7 @@ import {
 } from "@t3tools/contracts";
 import { acpRegistryClient } from "@t3tools/provider-acp-registry/client";
 import { cursorClient } from "@t3tools/provider-cursor/client";
+import { dshClient } from "@t3tools/provider-dsh/client";
 import { grokClient } from "@t3tools/provider-grok/client";
 import { kiroClient } from "@t3tools/provider-kiro/client";
 import { museClient } from "@t3tools/provider-muse/client";
@@ -36,6 +37,7 @@ const providerSecretFields = new Map([
   ...[
     cursorClient,
     grokClient,
+    dshClient,
     kiroClient,
     museClient,
     openCodeClient,
