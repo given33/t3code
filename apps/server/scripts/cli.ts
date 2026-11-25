@@ -89,6 +89,13 @@ const buildCmd = Command.make(
         }),
       );
 
+      const bridgeTarget = path.join(serverDir, "dist/dsh-acp-bridge");
+      yield* fs.makeDirectory(bridgeTarget, { recursive: true });
+      yield* fs.copyFile(
+        path.join(repoRoot, "packages/dsh-acp-bridge/dist/index.js"),
+        path.join(bridgeTarget, "index.js"),
+      );
+
       const webDist = path.join(repoRoot, "apps/web/dist");
       const clientTarget = path.join(serverDir, "dist/client");
 

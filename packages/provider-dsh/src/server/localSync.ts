@@ -361,19 +361,27 @@ export const readDshSkillRoots = Effect.fn("Dsh.readSkillRoots")(function* (
 export const locateDshBridge = Effect.fn("Dsh.locateBridge")(function* (
   settings: DshSettings,
   env: NodeJS.ProcessEnv,
+  moduleUrl = import.meta.url,
 ) {
   if (!settings.bridgeEnabled) return {};
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
-  const file =
-    env.T3_DSH_BRIDGE_PATH?.trim() ||
-    fileURLToPath(new URL("../../../dsh-acp-bridge/dist/index.js", import.meta.url));
-  const info = yield* fs.stat(file).pipe(Effect.orElseSucceed(() => undefined));
-  if (info?.type !== "File")
-    return {
-      warning: `T3 DSH bridge unavailable at ${file}. Using the official DeepSeek Harness ACP bridge.`,
-    };
-  return { url: pathToFileURL(path.resolve(file)).href };
+  // An explicit override is authoritative, even if missing. Otherwise check beside the
+  // server bundle first, then the sibling workspace package used by source-based launches.
+  const override = env.T3_DSH_BRIDGE_PATH?.trim();
+  const candidates = override
+    ? [override]
+    : [
+        fileURLToPath(new URL("./dsh-acp-bridge/index.js", moduleUrl)),
+        fileURLToPath(new URL("../../../dsh-acp-bridge/dist/index.js", moduleUrl)),
+      ];
+  for (const file of candidates) {
+    const info = yield* fs.stat(file).pipe(Effect.orElseSucceed(() => undefined));
+    if (info?.type === "File") return { url: pathToFileURL(path.resolve(file)).href };
+  }
+  return {
+    warning: `T3 DSH bridge unavailable at ${candidates.join(", ")}. Using the official DeepSeek Harness ACP bridge.`,
+  };
 });
 
 const resolveProfile = Effect.fn("Dsh.resolveProfile")(function* (

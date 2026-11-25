@@ -7,7 +7,7 @@ import * as Schema from "effect/Schema";
 import { parseDocument } from "yaml";
 import { decodeDshSettings } from "../settings.ts";
 import { dshModels } from "./catalog.ts";
-import { prepareDshOverlay } from "./localSync.ts";
+import { locateDshBridge, prepareDshOverlay } from "./localSync.ts";
 import { nodeLayer } from "./testing/fixture.ts";
 
 const decodeOverlay = Schema.decodeEffect(Schema.fromJsonString(Schema.Array(Schema.Unknown)));
@@ -76,6 +76,38 @@ const provider = {
   models: [{ id: "new", name: "Named model" }],
 };
 it.layer(nodeLayer)("DSH profile overlays", (it) => {
+  it.effect("prefers an explicit bridge, then the bundle sibling, then the source build", () =>
+    Effect.gen(function* () {
+      const { fs, home, path } = yield* harness();
+      const moduleDir = path.join(home, "packages", "provider-dsh", "src", "server");
+      const moduleUrl = (yield* path.toFileUrl(path.join(moduleDir, "module.mjs"))).href;
+      const sibling = path.join(moduleDir, "dsh-acp-bridge", "index.js");
+      const source = path.join(home, "packages", "dsh-acp-bridge", "dist", "index.js");
+      const override = path.join(home, "custom bridge.js");
+      const locate = (file?: string, bridgeEnabled = true) =>
+        locateDshBridge(
+          decodeDshSettings({ bridgeEnabled }),
+          { T3_DSH_BRIDGE_PATH: file },
+          moduleUrl,
+        );
+
+      expect(yield* locate()).toEqual({
+        warning: `T3 DSH bridge unavailable at ${sibling}, ${source}. Using the official DeepSeek Harness ACP bridge.`,
+      });
+      yield* fs.makeDirectory(path.dirname(source), { recursive: true });
+      yield* fs.writeFileString(source, "");
+      expect(yield* locate()).toEqual({ url: (yield* path.toFileUrl(source)).href });
+      yield* fs.makeDirectory(path.dirname(sibling), { recursive: true });
+      yield* fs.writeFileString(sibling, "");
+      expect(yield* locate("  ")).toEqual({ url: (yield* path.toFileUrl(sibling)).href });
+      expect(yield* locate(override)).toEqual({
+        warning: `T3 DSH bridge unavailable at ${override}. Using the official DeepSeek Harness ACP bridge.`,
+      });
+      yield* fs.writeFileString(override, "");
+      expect(yield* locate(override)).toEqual({ url: (yield* path.toFileUrl(override)).href });
+      expect(yield* locate(override, false)).toEqual({});
+    }),
+  );
   it.effect(
     "appends the native bridge to existing patches and preserves the profile ACP config",
     () =>
