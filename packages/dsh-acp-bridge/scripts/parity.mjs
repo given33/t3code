@@ -15,6 +15,7 @@ async function runSide(bridgeEnabled, cwd) {
         NodeAssert.ok(group, `Missing ${provider}`);
         console.log(`${label} ${provider} models=${group.options.length}`);
       }
+      console.log(`${label} default route=${models.currentValue}`);
       const pixel = models.options.find((g) => g.group === "pixel")?.options[0];
       const route = routeOverride || pixel?.value || models.currentValue;
       if (!route)
@@ -46,7 +47,7 @@ async function runSide(bridgeEnabled, cwd) {
       );
     },
   });
-  return normalize(trace, cwd, { liveUsage: true });
+  return normalize(trace, cwd, { liveUsage: true, t3Advertisements: bridgeEnabled });
 }
 
 async function main() {
@@ -67,6 +68,9 @@ async function main() {
   }
   if (traces.length !== 2) return;
   NodeAssert.deepEqual(traces[1], traces[0], "Behavior mismatch: live JSON-RPC traces differ");
+  console.log(
+    "expected: commands advertised only by T3 (session/new and session/resume, one each)",
+  );
   const sizes = traces[0]
     .filter(
       (m) => m.method === "session/update" && m.params.update.sessionUpdate === "usage_update",

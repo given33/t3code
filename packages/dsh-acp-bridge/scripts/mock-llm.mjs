@@ -1,4 +1,6 @@
 import * as NodeAssert from "node:assert/strict";
+import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
 import * as NodeHttp from "node:http";
 import * as NodeEvents from "node:events";
 import * as NodeTimersPromises from "node:timers/promises";
@@ -12,7 +14,48 @@ export const toolArgs = {
 };
 export const answer = "Offline stream verified.";
 
-export async function startMock() {
+export async function offlineProfile(root, bridgeEnabled, mock, extraPatch = []) {
+  const home = NodePath.join(root, bridgeEnabled ? "t3" : "official");
+  const profile = NodePath.join(home, "profiles", "acp");
+  await NodeFSP.mkdir(profile, { recursive: true });
+  const route = { provider: "t3-offline", model: modelId };
+  // The base profile already registers pi-ai. Replace it to avoid duplicate adapter declarations.
+  const patch = [
+    { id: "llm-pi-ai", disabled: true },
+    {
+      insert: [
+        {
+          id: "offline-model",
+          name: "@deepseek-ai/dsh-llm-pi-ai",
+          config: {
+            providers: {
+              [route.provider]: {
+                api: "openai-responses",
+                apiKeyEnv: "T3_OFFLINE_KEY",
+                baseURL: mock.url,
+                models: [{ id: modelId, name: "Offline" }],
+              },
+            },
+          },
+        },
+      ],
+    },
+    { id: "agent-default-model", config: route },
+    { id: "acp", config: route },
+  ];
+  await NodeFSP.writeFile(
+    NodePath.join(profile, "cordis.patch.yml"),
+    JSON.stringify([...patch, ...extraPatch]),
+  );
+  const variables = [
+    { name: "DSH_HOME", value: home },
+    { name: "DSH_TELEMETRY_DISABLED", value: "1" },
+    { name: "T3_OFFLINE_KEY", value: bridgeEnabled ? "offline-t3" : "offline-official" },
+  ];
+  return { variables, route };
+}
+
+export async function startMock({ textOnly = false, onModelInput } = {}) {
   const seen = new Map([
     ["Bearer offline-t3", []],
     ["Bearer offline-official", []],
@@ -27,6 +70,7 @@ export async function startMock() {
       const body = JSON.parse(Buffer.concat(parts).toString());
       NodeAssert.equal(body.model, modelId);
       NodeAssert.equal(body.stream, true);
+      onModelInput?.(body.input);
       const result = body.input.find((i) => i.type === "function_call_output");
       const tool = body.tools.find((t) => t.name === "pwsh");
       NodeAssert.ok(tool, `Missing pwsh (offered: ${body.tools.map((t) => t.name).join(", ")})`);
@@ -37,8 +81,9 @@ export async function startMock() {
         );
       const requests = seen.get(req.headers.authorization);
       NodeAssert.ok(requests, "Expected an isolated offline credential");
-      requests.push(result ? "text" : "tool");
-      NodeAssert.ok(requests.length <= 2, "Unexpected additional model request");
+      const replyWithText = textOnly || result !== undefined;
+      requests.push(replyWithText ? "text" : "tool");
+      NodeAssert.ok(requests.length <= (textOnly ? 3 : 2), "Unexpected additional model request");
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
       let sequence = 0;
       const send = (type, fields) =>
@@ -53,7 +98,7 @@ export async function startMock() {
         output: [],
       };
       send("response.created", { response });
-      const item = result
+      const item = replyWithText
         ? { type: "message", id: "msg_offline", role: "assistant", content: [] }
         : {
             type: "function_call",
@@ -67,7 +112,7 @@ export async function startMock() {
         item: { ...item, status: "in_progress" },
       });
       const fields = { item_id: item.id, output_index: 0 };
-      if (result) {
+      if (replyWithText) {
         const content = { type: "output_text", text: "", annotations: [] };
         send("response.content_part.added", { ...fields, content_index: 0, part: content });
         for (const delta of ["Offline stream ", "verified."]) {

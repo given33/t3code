@@ -13,7 +13,6 @@ import { ProviderDriverError } from "@t3tools/provider-core/server/errors";
 import { withInstanceIdentity } from "@t3tools/provider-core/server/instanceIdentity";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
 import { makeManagedServerProvider } from "@t3tools/provider-core/server/managedProvider";
-import type { ServerProviderDraft } from "@t3tools/provider-core/server/snapshotProbe";
 import {
   haveProviderSnapshotSettingsChanged,
   makeProviderSnapshotSettingsSource,
@@ -21,6 +20,8 @@ import {
 import type { ProviderTextGeneration } from "@t3tools/provider-core/server/textGeneration";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Path from "effect/Path";
+import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -29,6 +30,7 @@ import type * as Acp from "effect-acp/compat";
 import { DshSettings, decodeDshSettings } from "../settings.ts";
 import { isDshAgent, dshEnvironment, makeDshAcpRuntime } from "./acpSupport.ts";
 import { makeDshAdapterV2Driver, type DshAdapterV2DriverEnv } from "./adapter.ts";
+import { dshCommandCatalog } from "./commands.ts";
 import { discoverDshSkills } from "./skills.ts";
 import { dshCatalog, modelOption } from "./catalog.ts";
 import { DSH_PROVIDER, buildInitialDshProviderSnapshot, checkDshProviderStatus } from "./status.ts";
@@ -140,8 +142,17 @@ export const DshDriver: ProviderDriver<DshSettings, DshDriverEnv> = {
     // The instance registry recreates the driver on any runtime config change. Each fresh
     // settings source, adapter and discovery cache belong to that exact configuration.
     const source = yield* makeProviderSnapshotSettingsSource(settings);
-    const lastProbe = yield* Ref.make<ServerProviderDraft | undefined>(undefined);
-    const live = yield* SubscriptionRef.make<ReadonlyArray<Acp.SessionConfigOption>>([]);
+    const lastProbe = yield* Ref.make<
+      Effect.Success<ReturnType<typeof checkDshProviderStatus>> | undefined
+    >(undefined);
+    const path = yield* Path.Path;
+    const rescans = yield* Effect.acquireRelease(PubSub.unbounded<string>(), PubSub.shutdown);
+    type CommandCatalog = ReturnType<typeof dshCommandCatalog>;
+    const byCwd = new Map<string, CommandCatalog>();
+    const live = yield* SubscriptionRef.make<{
+      config: ReadonlyArray<Acp.SessionConfigOption>;
+      catalog?: CommandCatalog;
+    }>({ config: [] });
     const driverError = (cause: unknown) =>
       new ProviderDriverError({
         driver: DSH_PROVIDER,
@@ -183,15 +194,17 @@ export const DshDriver: ProviderDriver<DshSettings, DshDriverEnv> = {
       }),
       enrichSnapshot: ({ getSnapshot, publishSnapshot }) =>
         SubscriptionRef.changes(live).pipe(
-          Stream.runForEach((config) =>
-            !modelOption(config)
+          Stream.runForEach(({ config, catalog }) =>
+            !modelOption(config) && !catalog
               ? Effect.void
               : getSnapshot.pipe(
                   Effect.flatMap((current) =>
                     current.installed && current.status === "ready"
                       ? publishSnapshot({
                           ...current,
-                          ...dshCatalog(settings, config, current.models, current.subProviders),
+                          ...(modelOption(config) &&
+                            dshCatalog(settings, config, current.models, current.subProviders)),
+                          ...catalog,
                         })
                       : Effect.void,
                   ),
@@ -201,7 +214,15 @@ export const DshDriver: ProviderDriver<DshSettings, DshDriverEnv> = {
     }).pipe(Effect.mapError(driverError));
     const refresh = snapshot.refresh.pipe(Effect.provideService(DiscoverProfile, true));
     const adapter = yield* makeDshAdapterV2Driver({
-      onLiveConfiguration: (config) => SubscriptionRef.set(live, config),
+      onLiveConfiguration: (config) =>
+        SubscriptionRef.update(live, (state) => ({ ...state, config })),
+      onAvailableCommandsUpdate: (cwd, commands) => {
+        const catalog = dshCommandCatalog(commands);
+        return SubscriptionRef.update(live, (state) => {
+          byCwd.set(path.resolve(cwd), catalog);
+          return { ...state, catalog };
+        }).pipe(Effect.andThen(PubSub.publish(rescans, cwd)), Effect.asVoid);
+      },
       defaultModel: Ref.get(lastProbe).pipe(
         Effect.map((p) => p?.models.find((m) => m.isDefault)?.slug),
       ),
@@ -216,8 +237,11 @@ export const DshDriver: ProviderDriver<DshSettings, DshDriverEnv> = {
       accentColor,
       enabled,
       snapshot: { ...snapshot, refresh },
+      workspaceRescans: Stream.fromPubSub(rescans),
       snapshotForCwd: Effect.fn("Dsh.snapshotForCwd")(function* (cwd: string) {
         const machine = yield* snapshot.getSnapshot;
+        const scoped = byCwd.get(path.resolve(cwd));
+        const probe = yield* Ref.get(lastProbe);
         const skills = enabled
           ? yield* discoverDshSkills(settings, environment, cwd).pipe(
               Effect.provide(services),
@@ -232,7 +256,19 @@ export const DshDriver: ProviderDriver<DshSettings, DshDriverEnv> = {
               ),
             )
           : [];
-        return { ...machine, skills };
+        const catalog = scoped ?? (probe?.slashCommandsPending === false ? probe : undefined);
+        const seen = new Set<string>();
+        return {
+          ...machine,
+          slashCommandsPending: enabled && !catalog,
+          slashCommands: catalog?.slashCommands ?? [],
+          skills: [...(catalog?.skills ?? []), ...skills].filter(({ name }) => {
+            const key = name.toLowerCase();
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          }),
+        };
       }),
       refreshModels: () => Effect.asVoid(refresh),
       orchestrationAdapter: adapter,

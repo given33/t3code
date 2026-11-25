@@ -136,6 +136,12 @@ export function apply(ctx: Context, config: AcpConfig): void {
     ownedRecord(agent)?.onAgentStatus(status);
   });
 
+  if (ctx.get("commands") && typeof ctx.on === "function") {
+    ctx.on("commands/change", () => {
+      for (const record of sessions.values()) void record.advertiseCommands();
+    });
+  } else logger.warn("acp: commands/change unavailable, skipping command updates");
+
   ctx.on("llm/adapters-updated", () => {
     for (const record of sessions.values()) record.topologyChanged();
   });
@@ -220,6 +226,7 @@ export function apply(ctx: Context, config: AcpConfig): void {
         // The attached log writer's flush materializes an empty session durably.
         await ctx.sessions.flush(record.agent.session);
         assertOpen();
+        await record.advertiseCommands(signal);
         return { sessionId, configOptions };
       } catch (error: unknown) {
         sessions.delete(sessionId);
@@ -275,7 +282,9 @@ export function apply(ctx: Context, config: AcpConfig): void {
         }
         sessions.set(sessionId, record);
         try {
-          return { configOptions: await record.configOptions(signal) };
+          const configOptions = await record.configOptions(signal);
+          await record.advertiseCommands(signal);
+          return { configOptions };
         } catch (error: unknown) {
           sessions.delete(sessionId);
           await record.close("session/resume option discovery failed");

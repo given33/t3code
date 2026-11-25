@@ -112,6 +112,10 @@ interface DshAdapterV2Options {
   readonly services: Context.Context<FileSystem.FileSystem | Path.Path>;
   readonly assertComplete?: AcpAdapterV2Flavor["assertComplete"];
   readonly onLiveConfiguration?: LiveConfiguration;
+  readonly onAvailableCommandsUpdate?: (
+    cwd: string,
+    commands: Parameters<NonNullable<AcpAdapterV2Flavor["onAvailableCommandsUpdate"]>>[0],
+  ) => Effect.Effect<void>;
   readonly defaultModel?: Effect.Effect<string | undefined>;
 }
 
@@ -126,6 +130,18 @@ export function dshFlavor(options: DshAdapterV2Options): AcpAdapterV2Flavor {
         settings: options.settings,
         environment: { ...options.environment, ...processEnvironment },
       }).pipe(
+        // The shared flavor callback lacks a cwd. Bind discovery to this runtime so
+        // concurrent workspaces keep separate skill and command snapshots.
+        Effect.tap((session) => {
+          const publish = options.onAvailableCommandsUpdate;
+          return publish
+            ? session.handleSessionUpdate(({ update }) =>
+                update.sessionUpdate === "available_commands_update"
+                  ? publish(runtime.cwd, update.availableCommands)
+                  : Effect.void,
+              )
+            : Effect.void;
+        }),
         Effect.provide(options.services),
         Effect.mapError((e) =>
           e._tag === "PlatformError"
@@ -133,6 +149,7 @@ export function dshFlavor(options: DshAdapterV2Options): AcpAdapterV2Flavor {
             : e,
         ),
       ),
+    compactViaAdvertisedCommand: true,
     // DSH ACP never reports compaction_update, so internal compaction can drop T3 instructions.
     reinjectInstructionsEveryTurn: true,
     mcpOverHttp: true,
@@ -178,7 +195,10 @@ export type DshAdapterV2DriverEnv =
   | ProviderEventLoggers.ProviderEventLoggers
   | ProviderHost.ProviderHost;
 export const makeDshAdapterV2Driver = (
-  options: Pick<DshAdapterV2Options, "onLiveConfiguration" | "defaultModel"> = {},
+  options: Pick<
+    DshAdapterV2Options,
+    "onLiveConfiguration" | "onAvailableCommandsUpdate" | "defaultModel"
+  > = {},
 ): ProviderAdapterDriver<DshSettings, DshAdapterV2DriverEnv> => ({
   driverKind: DSH_PROVIDER,
   configSchema: DshSettings,

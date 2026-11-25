@@ -1,7 +1,15 @@
 import * as NodeAssert from "node:assert/strict";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
-import { answer, fileName, fixture, modelId, startMock, toolArgs } from "./mock-llm.mjs";
+import {
+  answer,
+  fileName,
+  fixture,
+  modelId,
+  offlineProfile,
+  startMock,
+  toolArgs,
+} from "./mock-llm.mjs";
 import { drive, normalize, withWorkspace } from "./drive.mjs";
 
 await withWorkspace(async (root) => {
@@ -12,40 +20,7 @@ await withWorkspace(async (root) => {
     await NodeFSP.writeFile(NodePath.join(cwd, fileName), fixture);
     const runs = await Promise.allSettled(
       [false, true].map(async (bridgeEnabled) => {
-        const home = NodePath.join(root, bridgeEnabled ? "t3" : "official");
-        const profile = NodePath.join(home, "profiles", "acp");
-        await NodeFSP.mkdir(profile, { recursive: true });
-        const route = { provider: "t3-offline", model: modelId };
-        // The base profile already registers pi-ai. Replace it to avoid duplicate adapter declarations.
-        const patch = [
-          { id: "llm-pi-ai", disabled: true },
-          {
-            insert: [
-              {
-                id: "offline-model",
-                name: "@deepseek-ai/dsh-llm-pi-ai",
-                config: {
-                  providers: {
-                    [route.provider]: {
-                      api: "openai-responses",
-                      apiKeyEnv: "T3_OFFLINE_KEY",
-                      baseURL: mock.url,
-                      models: [{ id: modelId, name: "Offline" }],
-                    },
-                  },
-                },
-              },
-            ],
-          },
-          { id: "agent-default-model", config: route },
-          { id: "acp", config: route },
-        ];
-        await NodeFSP.writeFile(NodePath.join(profile, "cordis.patch.yml"), JSON.stringify(patch));
-        const variables = [
-          { name: "DSH_HOME", value: home },
-          { name: "DSH_TELEMETRY_DISABLED", value: "1" },
-          { name: "T3_OFFLINE_KEY", value: bridgeEnabled ? "offline-t3" : "offline-official" },
-        ];
+        const { variables, route } = await offlineProfile(root, bridgeEnabled, mock);
         const { trace } = await drive({
           bridgeEnabled,
           cwd,
@@ -85,7 +60,7 @@ await withWorkspace(async (root) => {
             );
           },
         });
-        return normalize(trace, cwd);
+        return normalize(trace, cwd, { t3Advertisements: bridgeEnabled });
       }),
     );
     if (mock.failure) throw mock.failure;
@@ -96,7 +71,7 @@ await withWorkspace(async (root) => {
     for (const requests of mock.seen.values()) NodeAssert.deepEqual(requests, ["tool", "text"]);
     NodeAssert.deepEqual(traces[0], traces[1]);
     console.log(
-      "Offline parity OK: identical ordered messages, streamed text, tool input/output and close (agentInfo excluded).",
+      "Offline parity OK: identical ordered messages, streamed text, tool input/output and close (agentInfo and the two expected T3 setup advertisements accounted for).",
     );
   } catch (e) {
     throw mock.failure ?? e;

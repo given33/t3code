@@ -2,6 +2,11 @@ import { expect, it } from "@effect/vitest";
 import {
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
+  MessageId,
+  NodeId,
+  ProjectId,
+  RunAttemptId,
+  RunId,
   ProviderSessionId,
   ThreadId,
   ProviderInstanceId,
@@ -12,6 +17,7 @@ import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEve
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -74,7 +80,7 @@ it.layer(driverLayer)("DshDriver", (it) => {
         });
         const name = "reverse-engineer-anything";
         const skill = `---\r\nname: ${name}\r\ndescription: >-\r\n  Inspect shipped\r\n  artifacts.\r\n---\r\nBody`;
-        const user = yield* put(path.join(home, ".agents", "skills", name, "SKILL.md"), skill);
+        yield* put(path.join(home, ".agents", "skills", name, "SKILL.md"), skill);
         const project = yield* put(path.join(cwd, ".agents", "skills", "alias.md"), skill);
         const custom = yield* put(path.join(cwd, "custom", "hello.md"), "---\nname: hello\n---\n");
         yield* put(path.join(cwd, "custom", "missing.md"), "no frontmatter");
@@ -89,7 +95,7 @@ it.layer(driverLayer)("DshDriver", (it) => {
         const log = yield* f.log;
         if (!f.instance.snapshotForCwd) throw new Error("missing workspace snapshot");
         const workspace = yield* f.instance.snapshotForCwd(cwd);
-        expect(workspace.slashCommandsPending).toBeUndefined();
+        expect(workspace.slashCommandsPending).toBe(true);
         expect(workspace.slashCommands).toEqual(machine.slashCommands);
         expect(workspace.skills).toEqual([
           {
@@ -99,17 +105,138 @@ it.layer(driverLayer)("DshDriver", (it) => {
             scope: "project",
             enabled: true,
           },
-          {
-            name,
-            description: "Inspect shipped artifacts.",
-            path: user,
-            scope: "user",
-            enabled: true,
-          },
           { name: "hello", path: custom, scope: "user", enabled: true },
         ]);
         expect(yield* f.log).toEqual(log);
         expect(yield* fs.readFileString(profile)).toBe(patch);
+      }),
+  );
+  it.effect.each([true, false])(
+    "publishes scoped ACP commands and skills over disk fallback and gates /compact (advertised=%s)",
+    (allowed) =>
+      Effect.gen(function* () {
+        const f = yield* create(
+          "test-commands",
+          allowed ? "commands-compact" : "commands-without-compact",
+        );
+        const workspace = f.instance.snapshotForCwd;
+        if (!workspace || !f.instance.workspaceRescans)
+          throw new Error("missing workspace discovery");
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const dir = path.join(f.directory, ".agents", "skills");
+        yield* fs.makeDirectory(dir, { recursive: true });
+        for (const name of ["guide", "disk-only"])
+          yield* fs.writeFileString(
+            path.join(dir, `${name}.md`),
+            `---\nname: ${name}\ndescription: disk\n---\n`,
+          );
+        const before = yield* workspace(f.directory);
+        expect(before.slashCommandsPending).toBe(true);
+        expect(before.skills.find((s) => s.name === "guide")?.description).toBe("disk");
+        const rescan = yield* f.instance.workspaceRescans.pipe(
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        const threadId = ThreadId.make("dsh-compact");
+        const instanceId = f.instance.instanceId;
+        const modelSelection = { instanceId, model: "default" };
+        const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          cwd: f.directory,
+        });
+        const session = yield* f.instance.orchestrationAdapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("dsh-compact"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* session.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        expect(yield* Fiber.join(rescan)).toEqual([f.directory]);
+        const after = yield* workspace(f.directory);
+        expect(after.slashCommandsPending).toBe(false);
+        expect(after.slashCommands).toEqual(
+          allowed
+            ? [{ name: "compact", description: "Compact history", input: { hint: "focus" } }]
+            : [],
+        );
+        expect(after.skills.filter((s) => s.name === "guide")).toEqual([
+          {
+            name: "guide",
+            description: "ACP guide",
+            path: "acp://skill/guide",
+            scope: "agent",
+            enabled: true,
+          },
+        ]);
+        expect(after.skills.some((s) => s.name === "disk-only")).toBe(true);
+        expect((yield* workspace(path.dirname(f.directory))).slashCommandsPending).toBe(true);
+        if (!session.compactThread) throw new Error("missing compact action");
+        const now = yield* DateTime.now;
+        const compact = session.compactThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+          providerThread,
+          runOrdinal: 1,
+          providerTurnOrdinal: 1,
+          rootNodeId: NodeId.make("root"),
+          runId: RunId.make("run"),
+          attemptId: RunAttemptId.make("attempt"),
+          message: {
+            text: "",
+            attachments: [],
+            createdBy: "user",
+            creationSource: "web",
+            messageId: MessageId.make("message"),
+          },
+          appThread: {
+            id: threadId,
+            projectId: ProjectId.make("project"),
+            title: "DSH compact",
+            createdBy: "user",
+            creationSource: "web",
+            providerInstanceId: instanceId,
+            modelSelection,
+            runtimeMode: "approval-required",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            activeProviderThreadId: providerThread.id,
+            lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+            forkedFrom: null,
+            createdAt: now,
+            updatedAt: now,
+            archivedAt: null,
+            settledOverride: null,
+            settledAt: null,
+            lastVisitedAt: null,
+            deletedAt: null,
+          },
+        });
+        if (allowed) {
+          yield* compact;
+          yield* session.events.pipe(
+            Stream.takeUntil((e) => e.type === "turn.terminal"),
+            Stream.runDrain,
+          );
+        } else
+          expect(yield* Effect.flip(compact)).toMatchObject({
+            refusedBeforePrompt: true,
+            cause: { _tag: "ProviderCompactionUnsupportedError" },
+          });
+        expect(
+          (yield* f.log).filter((e) => e.method === "session/prompt").map((e) => e.compact),
+        ).toEqual(allowed ? [true] : []);
+        const probed = yield* f.instance.snapshot.refresh;
+        expect(probed.slashCommands).toEqual(after.slashCommands);
+        expect(probed.skills).toContainEqual(after.skills.find((s) => s.name === "guide"));
       }),
   );
   it.effect(

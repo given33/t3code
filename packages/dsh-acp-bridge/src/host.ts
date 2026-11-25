@@ -98,7 +98,34 @@ interface Setup {
   signal: AbortSignal;
   setup: (ctx: Context) => Promise<void>;
 }
+export interface AvailableCommand {
+  name: string;
+  description: string;
+  input?: { hint: string };
+}
 interface Services {
+  commands: {
+    list(agent: Agent): readonly AvailableCommand[];
+    execute(
+      agent: Agent,
+      line: string,
+      attachments: [],
+      signal: AbortSignal,
+    ): Promise<
+      | {
+          commandId: string;
+          result: { kind: "success" | "error"; text?: string };
+        }
+      | undefined
+    >;
+  };
+  skills: {
+    list(options: {
+      scope: Agent;
+      cwd?: string;
+      signal?: AbortSignal;
+    }): Promise<readonly { name: string; description: string }[]>;
+  };
   llm: LlmRuntime;
   attachments: {
     imageLimits: { mediaTypes: ImageMediaType[] };
@@ -116,6 +143,7 @@ interface Services {
   };
 }
 interface Events {
+  "commands/change": [];
   "session/event": [Session, SessionEvent];
   "agent/inbox/claimed": [{ agent: Agent; message: UserMessage; turn: number }];
   "agent/error": [{ agent: Agent; error: unknown }];
@@ -178,6 +206,7 @@ export interface ToolCallContent {
   content: AcpContentBlock;
 }
 export type SessionUpdate =
+  | { sessionUpdate: "available_commands_update"; availableCommands: AvailableCommand[] }
   | {
       sessionUpdate: "agent_message_chunk" | "agent_thought_chunk";
       messageId: string;

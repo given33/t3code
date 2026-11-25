@@ -179,7 +179,7 @@ const tokenCounters = [
   "cachedWriteTokens",
 ];
 
-export function normalize(trace, cwd, { liveUsage = false } = {}) {
+export function normalize(trace, cwd, { liveUsage = false, t3Advertisements = false } = {}) {
   const ids = new Map();
   function visit(v, key) {
     if (Array.isArray(v)) return v.map((item) => visit(item));
@@ -192,6 +192,27 @@ export function normalize(trace, cwd, { liveUsage = false } = {}) {
     }
     if (key === "cwd" && NodePath.resolve(v) === cwd) return "<workspace>";
     return v;
+  }
+  if (t3Advertisements) {
+    const expected = new Set(["session/new", "session/resume"]);
+    let pendingSetup;
+    const sessionId = trace.find((m) => m.method === "session/new")?.result.sessionId;
+    trace = trace.filter((m) => {
+      if (m.request) pendingSetup = expected.has(m.request) ? m.request : undefined;
+      if (m.method === pendingSetup && m.result) pendingSetup = undefined;
+      if (
+        m.method !== "session/update" ||
+        m.params?.update?.sessionUpdate !== "available_commands_update"
+      )
+        return true;
+      NodeAssert.ok(expected.delete(pendingSetup), "Unexpected extra T3 command advertisement");
+      NodeAssert.equal(m.params.sessionId, sessionId);
+      const names = m.params.update.availableCommands.map((c) => c.name);
+      NodeAssert.ok(names.length && names.every((name) => typeof name === "string" && name.length));
+      NodeAssert.deepEqual(names, [...new Set(names)].sort());
+      return false;
+    });
+    NodeAssert.equal(expected.size, 0, "Missing T3 setup command advertisement");
   }
   const copy = visit(trace);
   delete copy.find((m) => m.method === "initialize").result.agentInfo;

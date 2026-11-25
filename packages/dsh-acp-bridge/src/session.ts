@@ -1,5 +1,7 @@
 import type {
   Context,
+  AvailableCommand,
+  AcpContentBlock,
   McpServer,
   PromptRequest,
   PromptResponse,
@@ -81,6 +83,7 @@ export class AcpSession {
   readonly agent: Agent;
   private readonly modelControl: AcpModelControl;
   private outputTail = Promise.resolve();
+  private advertisedSkills = new Set<string>();
   private inflight: InflightPrompt | undefined;
   private closing: Promise<void> | undefined;
 
@@ -178,6 +181,94 @@ export class AcpSession {
       });
   }
 
+  advertiseCommands(signal?: AbortSignal): Promise<void> {
+    this.outputTail = this.outputTail
+      .then(async () => {
+        if (this.closing) return;
+        const commands = this.ctx.get("commands");
+        const skills = this.ctx.get("skills");
+        if (!commands || !skills) {
+          this.advertisedSkills.clear();
+          this.ctx.logger.warn(
+            `acp: ${!commands ? "commands" : "skills"} registry unavailable, skipping advertisement`,
+          );
+          return;
+        }
+        const cwd = this.agent.session.header.cwd;
+        const summaries = await skills.list({
+          scope: this.agent,
+          ...(cwd && { cwd }),
+          ...(signal && { signal }),
+        });
+        const entries = new Map<string, AvailableCommand>();
+        for (const { name, description, input } of commands.list(this.agent)) {
+          entries.set(name, { name, description, ...(input && { input: { hint: input.hint } }) });
+        }
+        for (const { name, description } of summaries) {
+          entries.set(`$${name}`, { name: `$${name}`, description });
+        }
+        if (!this.closing && !signal?.aborted) {
+          this.advertisedSkills = new Set(summaries.map((skill) => skill.name));
+          await this.notify({
+            sessionId: this.agent.session.id,
+            update: {
+              sessionUpdate: "available_commands_update",
+              availableCommands: [...entries.values()].sort((a, b) =>
+                a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+              ),
+            },
+          });
+        }
+      })
+      .catch((error: unknown) => {
+        this.ctx.logger.warn(
+          `acp: command advertisement failed: ${dshRuntime().llm.errorChain(error)}`,
+        );
+      });
+    return this.outputTail;
+  }
+
+  private async executeCommand(prompt: AcpContentBlock[], signal: AbortSignal): Promise<boolean> {
+    const line = prompt.find((block) => block.type === "text")?.text;
+    if (!line?.startsWith("/")) return false;
+    const commands = this.ctx.get("commands");
+    if (!commands) return false;
+    try {
+      const execution = await commands.execute(this.agent, line, [], signal);
+      signal.throwIfAborted();
+      if (!execution) return false;
+      if (execution.result.text)
+        await this.notify({
+          sessionId: this.agent.session.id,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            messageId: execution.commandId,
+            content: { type: "text", text: execution.result.text },
+          },
+        });
+      return true;
+    } catch (error) {
+      throw internalError(`command execution failed: ${dshRuntime().llm.errorChain(error)}`);
+    }
+  }
+
+  // DSH loads user-invoked skills from /name tokens in user text. Translate after
+  // command dispatch so a $skill sharing a command name cannot execute that command.
+  private resolveSkillMentions(prompt: AcpContentBlock[]): AcpContentBlock[] {
+    return prompt.map((block) =>
+      block.type !== "text" || !block.text.includes("$")
+        ? block
+        : {
+            ...block,
+            text: block.text.replace(
+              /(^|\s)\$([a-z0-9]+(?:-[a-z0-9]+)*)(?=\s|$)/gu,
+              (match: string, prefix: string, name: string) =>
+                this.advertisedSkills.has(name) ? `${prefix}/${name}` : match,
+            ),
+          },
+    );
+  }
+
   /** Admit, enqueue, and settle one prompt at whole-Agent quiescence. */
   async prompt(
     params: PromptRequest,
@@ -214,33 +305,38 @@ export class AcpSession {
     if (requestSignal?.aborted === true) onRequestAbort();
     try {
       let admissionFailure: unknown;
-      const promptSelection = this.agent.model.current();
       try {
         if (this.ctx.agents.get(this.agent.id) !== this.agent) {
           throw internalError("prompt was not queued: the agent was disposed outside the bridge");
         }
-        const content = await admitAcpPrompt(
-          this.ctx,
-          promptSelection,
-          params.prompt,
-          imageEnabled,
-          admissionController.signal,
-        );
-        admissionController.signal.throwIfAborted();
-        if (this.ctx.agents.get(this.agent.id) !== this.agent) {
-          throw internalError("prompt was not queued: the agent was disposed outside the bridge");
-        }
-        const message = dshRuntime().llm.createUserMessage({
-          content,
-          source: { kind: "user" },
-        });
-        inflight.messageId = message.id;
-        inflight.messageQueued = true;
-        try {
-          this.agent.followup(message);
-        } catch (error: unknown) {
-          inflight.messageQueued = false;
-          throw error;
+        const signal = admissionController.signal;
+        signal.throwIfAborted();
+        if (await this.executeCommand(params.prompt, signal)) {
+          inflight.endReason = { kind: "completed" };
+        } else {
+          const content = await admitAcpPrompt(
+            this.ctx,
+            this.agent.model.current(),
+            this.resolveSkillMentions(params.prompt),
+            imageEnabled,
+            signal,
+          );
+          signal.throwIfAborted();
+          if (this.ctx.agents.get(this.agent.id) !== this.agent) {
+            throw internalError("prompt was not queued: the agent was disposed outside the bridge");
+          }
+          const message = dshRuntime().llm.createUserMessage({
+            content,
+            source: { kind: "user" },
+          });
+          inflight.messageId = message.id;
+          inflight.messageQueued = true;
+          try {
+            this.agent.followup(message);
+          } catch (error: unknown) {
+            inflight.messageQueued = false;
+            throw error;
+          }
         }
       } catch (error: unknown) {
         admissionFailure = error;

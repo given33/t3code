@@ -14,6 +14,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as ChildProcess from "effect/process/ChildProcess";
@@ -27,6 +28,7 @@ import {
   isDshAgent,
 } from "./acpSupport.ts";
 import { configuredDshModels, locateDshBridge } from "./localSync.ts";
+import { dshCommandCatalog } from "./commands.ts";
 import { dshCatalog } from "./catalog.ts";
 
 const isRequestError = Schema.is(AcpRequestError);
@@ -38,10 +40,11 @@ const snapshot = (
   probe: ProviderProbeResult,
   {
     config,
+    commands,
     nativeSessions,
     previousModels,
   }: Partial<Discovery> & { previousModels?: ServerProviderDraft["models"] | undefined } = {},
-): ServerProviderDraft => {
+): ServerProviderDraft & { slashCommandsPending: boolean } => {
   const { models, subProviders } = dshCatalog(settings, config, previousModels);
   return {
     ...buildServerProvider({
@@ -56,8 +59,10 @@ const snapshot = (
       checkedAt,
       probe,
       models,
-      slashCommands: [],
+      slashCommands: commands?.slashCommands ?? [],
+      skills: commands?.skills ?? [],
     }),
+    slashCommandsPending: settings.enabled && !commands,
     supportsTextGeneration: false,
     ...(subProviders.length ? { subProviders } : {}),
     ...(nativeSessions ? { nativeSessions } : {}),
@@ -103,6 +108,12 @@ const probeConfiguration = Effect.fn("Dsh.probeConfiguration")(function* (
     clientInfo: { name: "t3-dsh-probe", version: "1" },
     authenticateOnAuthRequired: false,
   });
+  const commands = yield* Ref.make<ReturnType<typeof dshCommandCatalog> | undefined>(undefined);
+  yield* runtime.handleSessionUpdate(({ update }) =>
+    update.sessionUpdate === "available_commands_update"
+      ? Ref.set(commands, dshCommandCatalog(update.availableCommands))
+      : Effect.void,
+  );
   const initialized = yield* runtime.initialize();
   if (!isDshAgent(initialized.agentInfo?.name))
     return yield* AcpRequestError.invalidRequest("The configured CLI is not DeepSeek Harness ACP.");
@@ -112,6 +123,7 @@ const probeConfiguration = Effect.fn("Dsh.probeConfiguration")(function* (
   if (capabilities?.close != null) yield* runtime.closeSession(started.sessionId);
   return {
     config,
+    commands: yield* Ref.get(commands),
     nativeSessions: {
       canList: capabilities?.list != null,
       canResume: capabilities?.resume != null,

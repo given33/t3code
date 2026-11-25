@@ -54,6 +54,7 @@ for await (const line of NodeReadline.createInterface({ input: process.stdin }))
   // Do not record environment variables, MCP headers, or prompt payloads.
   log({
     method,
+    ...(method === "session/prompt" && { compact: params.prompt[0]?.text === "/compact" }),
     ...(params?.cwd && { cwd: params.cwd }),
     ...(params?.cursor && { cursor: params.cursor }),
     ...(params?.mcpServers && { mcpTypes: params.mcpServers.map((s) => s.type) }),
@@ -84,7 +85,25 @@ for await (const line of NodeReadline.createInterface({ input: process.stdin }))
     case "session/new":
       if (process.env.DSH_TEST_CASE === "probe-error")
         send({ id, error: { code: -32000, message: "Profile unavailable" } });
-      else send({ id, result: { sessionId: "sample-session", configOptions: config() } });
+      else {
+        if (process.env.DSH_TEST_CASE.startsWith("commands")) {
+          const availableCommands = [{ name: "$guide", description: "ACP guide" }];
+          if (process.env.DSH_TEST_CASE === "commands-compact")
+            availableCommands.push({
+              name: "compact",
+              description: "Compact history",
+              input: { hint: "focus" },
+            });
+          send({
+            method: "session/update",
+            params: {
+              sessionId: "sample-session",
+              update: { sessionUpdate: "available_commands_update", availableCommands },
+            },
+          });
+        }
+        send({ id, result: { sessionId: "sample-session", configOptions: config() } });
+      }
       break;
     case "session/set_config_option":
       if (params.configId === "model" && ids.includes(params.value)) {
