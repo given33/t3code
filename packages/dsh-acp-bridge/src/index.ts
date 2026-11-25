@@ -93,6 +93,16 @@ export function apply(ctx: Context, config: AcpConfig): void {
   const activating = new Set<SessionId>();
   let closed = false;
   let imagePromptEnabled = false;
+  let warnedMissingPresets = false;
+  const sessionModes = (record: AcpSession) => {
+    const modes = record.modes();
+    if (modes) return { modes };
+    if (!warnedMissingPresets) {
+      warnedMissingPresets = true;
+      logger.warn("acp: permissionPresets unavailable, omitting session modes");
+    }
+    return {};
+  };
 
   /** Return the bridge-owned record for an agent, rejecting same-id impostors. */
   const ownedRecord = (agent: Parameters<AcpSession["owns"]>[0]): AcpSession | undefined => {
@@ -227,7 +237,7 @@ export function apply(ctx: Context, config: AcpConfig): void {
         await ctx.sessions.flush(record.agent.session);
         assertOpen();
         await record.advertiseCommands(signal);
-        return { sessionId, configOptions };
+        return { sessionId, configOptions, ...sessionModes(record) };
       } catch (error: unknown) {
         sessions.delete(sessionId);
         await record.close("session/new activation failed");
@@ -284,7 +294,7 @@ export function apply(ctx: Context, config: AcpConfig): void {
         try {
           const configOptions = await record.configOptions(signal);
           await record.advertiseCommands(signal);
-          return { configOptions };
+          return { configOptions, ...sessionModes(record) };
         } catch (error: unknown) {
           sessions.delete(sessionId);
           await record.close("session/resume option discovery failed");
@@ -411,6 +421,11 @@ export function apply(ctx: Context, config: AcpConfig): void {
       implementation.resumeSession(params, signal),
     )
     .onRequest(methods.agent.session.close, ({ params }) => implementation.closeSession(params))
+    .onRequest(methods.agent.session.setMode, async ({ params }) => {
+      assertOpen();
+      await requireSession(brandString<SessionId>(params.sessionId)).setMode(params.modeId);
+      return {};
+    })
     .onRequest(methods.agent.session.setConfigOption, ({ params, signal }) =>
       implementation.setSessionConfigOption(params, signal),
     )

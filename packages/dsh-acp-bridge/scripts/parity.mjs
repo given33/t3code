@@ -51,6 +51,7 @@ async function runSide(bridgeEnabled, cwd) {
   return normalize(trace, cwd, {
     liveUsage: true,
     t3Advertisements: bridgeEnabled,
+    t3Modes: bridgeEnabled,
     t3TurnReset: bridgeEnabled,
   });
 }
@@ -81,6 +82,9 @@ async function main() {
   );
   console.log(
     "expected: T3 uses presenter tool kind/title and pending status; official uses other/name and in_progress. The live prompt requests no tools; e2e-offline compares one real pwsh lifecycle.",
+  );
+  console.log(
+    "expected: only T3 advertises permission modes in session/new and session/resume; current_mode_update remains in the comparison.",
   );
   const sizes = traces[0]
     .filter(

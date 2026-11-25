@@ -3,9 +3,11 @@ import type {
   ProviderInstanceEnvironment,
   RuntimeMode,
 } from "@t3tools/contracts";
+import type { AcpAdapterV2Flavor } from "@t3tools/provider-acp/server/adapter";
 import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import {
   acpPermissionDisposition,
+  unknownRecord,
   type AcpRuntimePolicy,
 } from "@t3tools/provider-acp/server/clientPolicy";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
@@ -26,6 +28,39 @@ export const DSH_SUPPORTED_RUNTIME_MODES = [
   "approval-required",
   "full-access",
 ] as const satisfies ReadonlyArray<RuntimeMode>;
+
+export const dshSessionModeForPolicy: NonNullable<AcpAdapterV2Flavor["sessionModeForPolicy"]> = (
+  policy,
+  modes,
+) => {
+  // The official bridge (also the fallback when the overlay is unavailable) has no modes.
+  if (!modes) return undefined;
+  const sandbox = unknownRecord(policy.sandboxPolicy)?.type;
+  if (
+    policy.sandboxPolicy !== undefined &&
+    sandbox !== "dangerFullAccess" &&
+    sandbox !== "workspaceWrite"
+  )
+    return "read-only";
+  if (
+    sandbox === "workspaceWrite" ||
+    (policy.approvalPolicy !== undefined && policy.approvalPolicy !== "never")
+  )
+    return "workspace-write";
+  switch (policy.runtimeMode) {
+    case "full-access":
+      return "danger-full-access";
+    case "auto":
+      if (modes.availableModes.some((mode) => mode.id === "auto")) return "auto";
+      // The base profile has no Auto reviewer. Never widen a managed ceiling.
+      return policy.maxRuntimeMode === undefined || policy.maxRuntimeMode === "full-access"
+        ? "danger-full-access"
+        : "workspace-write";
+    case "auto-accept-edits": // DSH has no edits-only preset. T3 handles edit approvals.
+    case "approval-required":
+      return "workspace-write";
+  }
+};
 
 export const dshEnvironment = Effect.fn("Dsh.environment")(function* (
   variables: ProviderInstanceEnvironment,
@@ -63,7 +98,8 @@ export function dshPermissionDisposition(
   request: Acp.RequestPermissionRequest,
 ) {
   const result = acpPermissionDisposition(
-    policy.runtimeMode === "full-access" ? policy : { ...policy, runtimeMode: "approval-required" },
+    // DSH Auto forwards requests its reviewer could not admit; let the user decide.
+    policy.runtimeMode === "auto" ? { ...policy, runtimeMode: "approval-required" } : policy,
     request,
   );
   return result === "allow" &&

@@ -529,6 +529,7 @@ export interface AcpAdapterV2Flavor {
   readonly lockSessionModeToPolicy?: true;
   readonly sessionModeForPolicy?: (
     policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+    modes: AcpSessionModeState | undefined,
   ) => string | undefined;
   /**
    * Native select-option values to apply for a runtime policy (e.g. Kiro's
@@ -8480,7 +8481,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             if (!advertisedValues.includes(selection.value)) continue;
             yield* runtime.setConfigOption(selection.id, selection.value);
           }
-          const policyMode = flavor.sessionModeForPolicy?.(runtimePolicy);
+          const policyMode = flavor.sessionModeForPolicy?.(
+            runtimePolicy,
+            yield* runtime.getModeState,
+          );
           const modeLocked = flavor.lockSessionModeToPolicy && policyMode !== undefined;
           if (policyMode !== undefined) {
             yield* runtime.setMode(policyMode);

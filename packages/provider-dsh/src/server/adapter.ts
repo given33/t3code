@@ -35,6 +35,7 @@ import {
   dshApprovalOptions,
   dshEnvironment,
   dshPermissionDisposition,
+  dshSessionModeForPolicy,
   makeDshAcpRuntime,
 } from "./acpSupport.ts";
 import { DSH_DEFAULT, modelOption, modelRoute, encodeRoute } from "./catalog.ts";
@@ -154,6 +155,8 @@ export function dshFlavor(options: DshAdapterV2Options): AcpAdapterV2Flavor {
     reinjectInstructionsEveryTurn: true,
     mcpOverHttp: true,
     promptFailure: dshPromptFailure,
+    sessionModeForPolicy: dshSessionModeForPolicy,
+    lockSessionModeToPolicy: true,
     permissionDisposition: dshPermissionDisposition,
     approvalOptions: dshApprovalOptions,
     applyModelSelection: Effect.fn(function* ({ runtime, modelSelection, startResult }) {

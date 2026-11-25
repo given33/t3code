@@ -64,6 +64,7 @@ async function runOfflineParity(root) {
         });
         return normalize(trace, cwd, {
           t3Advertisements: bridgeEnabled,
+          t3Modes: bridgeEnabled,
           t3TurnReset: bridgeEnabled,
           pwshCommand: bridgeEnabled ? toolArgs.command : undefined,
         });
@@ -77,7 +78,7 @@ async function runOfflineParity(root) {
     for (const requests of mock.seen.values()) NodeAssert.deepEqual(requests, ["tool", "text"]);
     NodeAssert.deepEqual(traces[0], traces[1]);
     console.log(
-      "Offline parity OK: identical ordered messages, streamed text, tool input/output and close (accounted for agentInfo, setup advertisements, turn/start plan reset and pwsh presentation).",
+      "Offline parity OK: identical ordered messages, streamed text, tool input/output and close (accounted for agentInfo, setup advertisements and permission modes, turn/start plan reset and pwsh presentation).",
     );
   } catch (e) {
     throw mock.failure ?? e;

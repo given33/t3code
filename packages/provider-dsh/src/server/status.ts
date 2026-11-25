@@ -51,7 +51,7 @@ const snapshot = (
       driver: DSH_PROVIDER,
       presentation: {
         displayName: "DeepSeek Harness",
-        showInteractionModeToggle: false,
+        showInteractionModeToggle: settings.enabled,
         supportedRuntimeModes: DSH_SUPPORTED_RUNTIME_MODES,
         supportsConversationRollback: false,
       },

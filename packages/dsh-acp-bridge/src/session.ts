@@ -7,6 +7,7 @@ import type {
   PromptResponse,
   SessionConfigOption,
   SessionNotification,
+  SessionModeState,
   StopReason,
   Agent,
   AgentHandle,
@@ -83,6 +84,7 @@ export class AcpSession {
   readonly agent: Agent;
   private readonly modelControl: AcpModelControl;
   private readonly activityUpdates: SessionActivityUpdates;
+  private lastModeId: string | undefined;
   private outputTail = Promise.resolve();
   private advertisedSkills = new Set<string>();
   private inflight: InflightPrompt | undefined;
@@ -148,6 +150,51 @@ export class AcpSession {
   configOptions(signal?: AbortSignal): Promise<SessionConfigOption[]> {
     this.assertActive();
     return this.modelControl.options(signal);
+  }
+
+  modes(): SessionModeState | undefined {
+    const presets = this.ctx.get("permissionPresets");
+    if (!presets) return undefined;
+    // ACP v1 SessionModeState has no membership constraint. A derived "custom"
+    // stays visible as current without becoming a selectable permission grant.
+    this.lastModeId = presets.current(this.agent.session);
+    return {
+      currentModeId: this.lastModeId,
+      availableModes: presets.names.map((id) => {
+        const { name, description } = presets.optionOf(id);
+        return { id, name, ...(description === undefined ? {} : { description }) };
+      }),
+    };
+  }
+
+  async setMode(modeId: string): Promise<void> {
+    this.assertActive();
+    const presets = this.ctx.get("permissionPresets");
+    if (!presets || modeId === "custom" || !presets.names.includes(modeId)) {
+      throw invalidParams(`unavailable permission preset: ${modeId}`);
+    }
+    try {
+      presets.set(this.agent.session, modeId);
+    } catch (error) {
+      throw invalidParams(
+        `cannot select permission preset ${modeId}: ${dshRuntime().llm.errorChain(error)}`,
+      );
+    }
+    this.publishModeChange();
+    await this.outputTail;
+  }
+
+  private publishModeChange(): void {
+    if (this.closing || this.lastModeId === undefined) return;
+    const currentModeId = this.ctx.get("permissionPresets")?.current(this.agent.session);
+    if (currentModeId === undefined || currentModeId === this.lastModeId) return;
+    this.lastModeId = currentModeId;
+    this.outputTail = this.outputTail.then(() =>
+      this.notify({
+        sessionId: this.agent.session.id,
+        update: { sessionUpdate: "current_mode_update", currentModeId },
+      }),
+    );
   }
 
   /** Apply one standard configuration option to later ACP turns. */
@@ -387,7 +434,23 @@ export class AcpSession {
       this.inflight.endReason = undefined;
     }
     try {
-      if (event.type === "assistant/message") {
+      if (
+        event.type === "permission/preset" ||
+        event.type === "sandbox/mode" ||
+        event.type === "approval/policy"
+      ) {
+        // DSH appends intent first, then writes both knobs synchronously. Wait for
+        // the settled projection, even if no matching knob event was necessary.
+        queueMicrotask(() => {
+          try {
+            this.publishModeChange();
+          } catch (error) {
+            this.ctx.logger.warn(
+              `acp: permission mode update failed: ${dshRuntime().llm.errorChain(error)}`,
+            );
+          }
+        });
+      } else if (event.type === "assistant/message") {
         const inflight = this.inflight?.turn === event.data.turn ? this.inflight : undefined;
         const previous = this.outputTail;
         const delivery = previous.then(async () => {

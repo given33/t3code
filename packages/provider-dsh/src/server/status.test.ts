@@ -43,6 +43,7 @@ it.layer(nodeLayer)("DeepSeek Harness status", (it) => {
           installed: true,
           version: "0.2.3-alpha.2",
           status: "ready",
+          showInteractionModeToggle: true,
         });
         expect((yield* f.log).map((entry) => entry.method)).toEqual(["version"]);
       }),

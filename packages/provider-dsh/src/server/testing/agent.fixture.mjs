@@ -22,6 +22,9 @@ const ids = [JSON.stringify(["alpha", "sample"]), JSON.stringify(["beta", "sampl
 let model = ids[0];
 let effort = "";
 let pending;
+const presetIds = ["read-only", "workspace-write", "danger-full-access"];
+if (process.env.DSH_TEST_CASE === "modes-auto") presetIds.push("auto");
+let currentModeId = "read-only";
 const config = () => [
   {
     id: "model",
@@ -58,6 +61,7 @@ for await (const line of NodeReadline.createInterface({ input: process.stdin }))
     ...(params?.cwd && { cwd: params.cwd }),
     ...(params?.cursor && { cursor: params.cursor }),
     ...(params?.mcpServers && { mcpTypes: params.mcpServers.map((s) => s.type) }),
+    ...(method === "session/set_mode" && { modeId: params.modeId, sessionId: params.sessionId }),
     ...(params?.configId && { configId: params.configId, value: params.value }),
   });
   switch (method) {
@@ -102,7 +106,31 @@ for await (const line of NodeReadline.createInterface({ input: process.stdin }))
             },
           });
         }
-        send({ id, result: { sessionId: "sample-session", configOptions: config() } });
+        send({
+          id,
+          result: {
+            sessionId: "sample-session",
+            configOptions: config(),
+            ...(process.env.DSH_TEST_CASE.startsWith("modes") && {
+              modes: { currentModeId, availableModes: presetIds.map((id) => ({ id, name: id })) },
+            }),
+          },
+        });
+      }
+      break;
+    case "session/set_mode":
+      if (!process.env.DSH_TEST_CASE.startsWith("modes") || !presetIds.includes(params.modeId)) {
+        send({ id, error: { code: -32602, message: "Unavailable mode" } });
+      } else {
+        currentModeId = params.modeId;
+        send({
+          method: "session/update",
+          params: {
+            sessionId: params.sessionId,
+            update: { sessionUpdate: "current_mode_update", currentModeId },
+          },
+        });
+        send({ id, result: {} });
       }
       break;
     case "session/set_config_option":

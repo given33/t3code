@@ -24,6 +24,7 @@ export async function drive({
   syncLocalModels,
   profile,
   allowPermission,
+  onResponse,
   run,
 }) {
   const label = bridgeEnabled ? "T3" : "official";
@@ -76,11 +77,12 @@ export async function drive({
           } else {
             NodeAssert.ok(pending, "Unexpected JSON-RPC response");
             NodeAssert.equal(msg.id, pending.id);
+            onResponse?.(pending.method, msg);
             if (msg.error) {
               const { message } = makeProviderFailure({
                 message: `${pending.method} RPC ${msg.error.code}: ${msg.error.message}`,
               });
-              const err = new Error(message);
+              const err = Object.assign(new Error(message), { code: msg.error.code });
               trace.push({ method: pending.method, error: err.message });
               pending.reject(err);
             } else {
@@ -182,7 +184,13 @@ const tokenCounters = [
 export function normalize(
   trace,
   cwd,
-  { liveUsage = false, t3Advertisements = false, t3TurnReset = false, pwshCommand } = {},
+  {
+    liveUsage = false,
+    t3Advertisements = false,
+    t3Modes = false,
+    t3TurnReset = false,
+    pwshCommand,
+  } = {},
 ) {
   const ids = new Map();
   function visit(v, key) {
@@ -242,6 +250,21 @@ export function normalize(
   }
   const copy = visit(trace);
   delete copy.find((m) => m.method === "initialize").result.agentInfo;
+  if (t3Modes) {
+    // These parity prompts never change permissions. Remove only the two checked
+    // setup response fields. Every notification still participates in comparison.
+    let initial;
+    for (const method of ["session/new", "session/resume"]) {
+      const setups = copy.filter((m) => m.method === method && m.result);
+      NodeAssert.equal(setups.length, 1);
+      const { modes } = setups[0].result;
+      NodeAssert.ok(modes?.currentModeId && modes.availableModes.length);
+      NodeAssert.ok(modes.availableModes.every((m) => m.id && m.name));
+      if (method === "session/new") initial = modes;
+      else NodeAssert.deepEqual(modes, initial, "Permission modes changed across resume");
+      delete setups[0].result.modes;
+    }
+  }
   if (pwshCommand) {
     const updates = copy.filter((m) => m.method === "session/update").map((m) => m.params.update);
     const calls = updates.filter((u) => u.sessionUpdate === "tool_call");

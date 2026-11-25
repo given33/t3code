@@ -59,6 +59,42 @@ const create = Effect.fn(function* (
 });
 
 it.layer(driverLayer)("DshDriver", (it) => {
+  it.effect.each([
+    ["modes", "approval-required", "workspace-write"],
+    ["modes", "auto-accept-edits", "workspace-write"],
+    ["modes", "auto", "danger-full-access"],
+    ["modes-auto", "auto", "auto"],
+    ["modes", "full-access", "danger-full-access"],
+    ["ok", "approval-required", undefined], // Official bridge without modes.
+  ] as const)("configures %j before the first prompt", ([scenario, runtimeMode, expected]) =>
+    Effect.gen(function* () {
+      const f = yield* create("mode-test", scenario);
+      const threadId = ThreadId.make("mode-test");
+      const modelSelection = { instanceId: f.instance.instanceId, model: "default" };
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode,
+        interactionMode: "default",
+        cwd: f.directory,
+      });
+      const session = yield* f.instance.orchestrationAdapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("mode-test"),
+        modelSelection,
+        runtimePolicy,
+      });
+      yield* session.ensureThread({ threadId, modelSelection, runtimePolicy });
+      expect(
+        (yield* f.log).filter((m) =>
+          ["session/new", "session/set_mode", "session/prompt"].includes(m.method),
+        ),
+      ).toEqual([
+        expect.objectContaining({ method: "session/new" }),
+        ...(expected
+          ? [{ method: "session/set_mode", sessionId: "sample-session", modeId: expected }]
+          : []),
+      ]);
+    }),
+  );
   it.effect(
     "lists workspace skills without advertising commands, launching DSH or writing the profile",
     () =>

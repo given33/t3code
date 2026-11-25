@@ -7,6 +7,9 @@ vi.mock("./dshRuntime.js", () => ({
   dshRuntime: () => ({
     sdk: {
       RequestError: class RequestError extends Error {
+        static invalidParams(_data: undefined, detail: string) {
+          return Object.assign(new RequestError(detail), { code: -32602 });
+        }
         static internalError(_data: undefined, detail: string) {
           return Object.assign(new RequestError(detail), { code: -32603 });
         }
@@ -347,4 +350,43 @@ it("keeps the committed result when presentResult throws", async () => {
     },
   });
   expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("presentResult failed"));
+});
+
+it("keeps derived custom out of the target list and orders concurrent successful mode changes", async () => {
+  let current = "custom";
+  const permissionPresets = {
+    names: ["a", "b"],
+    current: () => current,
+    optionOf: (id: string) => ({
+      name: id.toUpperCase(),
+      ...(id === "b" && { description: "Second" }),
+    }),
+    set: vi.fn((_session: unknown, id: string) => {
+      current = id;
+    }),
+  };
+  const { session, notify } = await setup({ permissionPresets });
+  expect(session.modes()).toEqual({
+    currentModeId: "custom",
+    availableModes: [
+      { id: "a", name: "A" },
+      { id: "b", name: "B", description: "Second" },
+    ],
+  });
+  await expect(session.setMode("custom")).rejects.toMatchObject({ code: -32602 });
+  expect(permissionPresets.set).not.toHaveBeenCalled();
+  await Promise.all([session.setMode("a"), session.setMode("b"), session.setMode("b")]);
+  expect(notify.mock.calls.map(([m]) => m.update)).toEqual([
+    { sessionUpdate: "current_mode_update", currentModeId: "a" },
+    { sessionUpdate: "current_mode_update", currentModeId: "b" },
+  ]);
+  await session.close("done");
+  await expect(session.setMode("a")).rejects.toThrow("session is closing");
+});
+
+it("omits mode state and rejects writes when the optional permission service is absent", async () => {
+  const { session, notify } = await setup();
+  expect(session.modes()).toBeUndefined();
+  await expect(session.setMode("workspace-write")).rejects.toMatchObject({ code: -32602 });
+  expect(notify).not.toHaveBeenCalled();
 });

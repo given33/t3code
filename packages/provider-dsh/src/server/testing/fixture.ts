@@ -23,6 +23,8 @@ const readLogEntry = Schema.decodeUnknownSync(
       patch: Schema.optional(Schema.Array(Schema.Unknown)),
       mcpTypes: Schema.optional(Schema.Array(Schema.String)),
       compact: Schema.optional(Schema.Boolean),
+      sessionId: Schema.optional(Schema.String),
+      modeId: Schema.optional(Schema.String),
       configId: Schema.optional(Schema.String),
       value: Schema.optional(Schema.String),
     }),

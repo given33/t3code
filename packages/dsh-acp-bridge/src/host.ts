@@ -69,6 +69,9 @@ export interface Session {
   seq: number;
 }
 interface EventData {
+  "permission/preset": { preset: string };
+  "sandbox/mode": unknown;
+  "approval/policy": unknown;
   "turn/start": { turn: number };
   "assistant/message": { turn: number; message: UserMessage; usage?: unknown };
   "tool/call": { callId: string; name: string; arguments: string };
@@ -139,6 +142,12 @@ export interface ToolDefinition {
     | undefined;
 }
 interface Services {
+  permissionPresets: {
+    readonly names: readonly string[];
+    current(session: Session): string;
+    optionOf(name: string): { name: string; description?: string };
+    set(session: Session, name: string): void;
+  };
   tools: { get(name: string, scope: Agent): ToolDefinition | undefined };
   commands: {
     list(agent: Agent): readonly AvailableCommand[];
@@ -269,6 +278,7 @@ export type SessionUpdate =
       sessionUpdate: "plan";
       entries: { content: string; status: PlanStatus; priority: "medium" }[];
     }
+  | { sessionUpdate: "current_mode_update"; currentModeId: string }
   | { sessionUpdate: "usage_update"; used: number; size: number }
   | { sessionUpdate: "config_option_update"; configOptions: SessionConfigOption[] };
 export interface SessionNotification {
@@ -294,15 +304,19 @@ interface Workspace {
 export interface NewSessionRequest extends Workspace {
   mcpServers: McpServer[];
 }
-export interface NewSessionResponse {
+export interface NewSessionResponse extends ResumeSessionResponse {
   sessionId: string;
-  configOptions: SessionConfigOption[];
 }
 export interface ResumeSessionRequest extends Workspace {
   sessionId: string;
   mcpServers?: McpServer[];
 }
+export interface SessionModeState {
+  currentModeId: string;
+  availableModes: { id: string; name: string; description?: string }[];
+}
 export interface ResumeSessionResponse {
+  modes?: SessionModeState;
   configOptions: SessionConfigOption[];
 }
 export interface ListSessionsRequest {
@@ -323,7 +337,7 @@ export interface SetSessionConfigOptionRequest {
   configId: string;
   value: unknown;
 }
-export type SetSessionConfigOptionResponse = ResumeSessionResponse;
+export type SetSessionConfigOptionResponse = Pick<ResumeSessionResponse, "configOptions">;
 export interface PromptRequest {
   sessionId: string;
   prompt: AcpContentBlock[];
@@ -396,6 +410,7 @@ export interface DshRuntime {
           list: Rpc<ListSessionsRequest, ListSessionsResponse>;
           resume: Rpc<ResumeSessionRequest, ResumeSessionResponse>;
           close: Rpc<CloseSessionRequest, CloseSessionResponse>;
+          setMode: Rpc<{ sessionId: string; modeId: string }, Record<string, never>>;
           setConfigOption: Rpc<SetSessionConfigOptionRequest, SetSessionConfigOptionResponse>;
           prompt: Rpc<PromptRequest, PromptResponse>;
           cancel: Rpc<CancelNotification, void>;

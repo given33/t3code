@@ -8,7 +8,12 @@ import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import type * as Acp from "effect-acp/compat";
 import { AcpRequestError } from "effect-acp/errors";
-import { dshApprovalOptions, dshPermissionDisposition, makeDshAcpRuntime } from "./acpSupport.ts";
+import {
+  dshApprovalOptions,
+  dshPermissionDisposition,
+  makeDshAcpRuntime,
+  dshSessionModeForPolicy,
+} from "./acpSupport.ts";
 import {
   applyDshModelSelection,
   DshProviderCapabilitiesV2,
@@ -52,6 +57,35 @@ describe("DeepSeek ACP policy", () => {
       "ask",
     );
     expect(dshApprovalOptions(persistent)).toEqual([{ decision: "cancel", label: "Cancel" }]);
+  });
+  it("uses T3 client policy for edits-only and respects explicit sandbox, approval and managed limits", () => {
+    const edits = { cwd: null, runtimeMode: "auto-accept-edits" } as const;
+    const modes = {
+      currentModeId: "workspace-write",
+      availableModes: [{ id: "danger-full-access", name: "Full" }],
+    };
+    const full = { cwd: null, runtimeMode: "full-access", interactionMode: "default" } as const;
+    expect(
+      dshPermissionDisposition(edits, {
+        ...request,
+        toolCall: { toolCallId: "edit", kind: "edit" },
+      }),
+    ).toBe("allow");
+    expect(
+      dshPermissionDisposition(edits, {
+        ...request,
+        toolCall: { toolCallId: "exec", kind: "execute" },
+      }),
+    ).toBe("ask");
+    expect(dshSessionModeForPolicy({ ...full, sandboxPolicy: { type: "readOnly" } }, modes)).toBe(
+      "read-only",
+    );
+    expect(dshSessionModeForPolicy({ ...full, approvalPolicy: "on-request" }, modes)).toBe(
+      "workspace-write",
+    );
+    expect(
+      dshSessionModeForPolicy({ ...full, runtimeMode: "auto", maxRuntimeMode: "auto" }, modes),
+    ).toBe("workspace-write");
   });
   it("classifies ACP limit errors without labeling ordinary failures as limits", () => {
     for (const message of ["rate_limit", "quota exceeded", "quota_exceeded", "HTTP 429"])
