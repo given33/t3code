@@ -21,7 +21,7 @@ import { AcpRequestError } from "effect-acp/errors";
 import type { DshSettings } from "../settings.ts";
 import { DSH_SUPPORTED_RUNTIME_MODES, makeDshAcpRuntime, resolveDshBinary } from "./acpSupport.ts";
 import { configuredDshModels } from "./localSync.ts";
-import { dshModels } from "./catalog.ts";
+import { dshCatalog } from "./catalog.ts";
 
 const isRequestError = Schema.is(AcpRequestError);
 export const DSH_PROVIDER = ProviderDriverKind.make("dsh");
@@ -30,24 +30,32 @@ const snapshot = (
   settings: DshSettings,
   checkedAt: string,
   probe: ProviderProbeResult,
-  discovery?: Discovery,
-): ServerProviderDraft => ({
-  ...buildServerProvider({
-    driver: DSH_PROVIDER,
-    presentation: {
-      displayName: "DeepSeek Harness",
-      showInteractionModeToggle: false,
-      supportedRuntimeModes: DSH_SUPPORTED_RUNTIME_MODES,
-      supportsConversationRollback: false,
-    },
-    enabled: settings.enabled,
-    checkedAt,
-    probe,
-    models: dshModels(settings, discovery?.config),
-  }),
-  supportsTextGeneration: false,
-  ...(discovery ? { nativeSessions: discovery.nativeSessions } : {}),
-});
+  {
+    config,
+    nativeSessions,
+    previousModels,
+  }: Partial<Discovery> & { previousModels?: ServerProviderDraft["models"] | undefined } = {},
+): ServerProviderDraft => {
+  const { models, subProviders } = dshCatalog(settings, config, previousModels);
+  return {
+    ...buildServerProvider({
+      driver: DSH_PROVIDER,
+      presentation: {
+        displayName: "DeepSeek Harness",
+        showInteractionModeToggle: false,
+        supportedRuntimeModes: DSH_SUPPORTED_RUNTIME_MODES,
+        supportsConversationRollback: false,
+      },
+      enabled: settings.enabled,
+      checkedAt,
+      probe,
+      models,
+    }),
+    supportsTextGeneration: false,
+    ...(subProviders.length ? { subProviders } : {}),
+    ...(nativeSessions ? { nativeSessions } : {}),
+  };
+};
 
 export const buildInitialDshProviderSnapshot = Effect.fn("Dsh.initialSnapshot")(function* (
   settings: DshSettings,
@@ -111,6 +119,7 @@ export const checkDshProviderStatus = Effect.fn("Dsh.checkStatus")(function* (
   settings: DshSettings,
   environment: NodeJS.ProcessEnv,
   discover = true,
+  previous?: ServerProviderDraft,
 ) {
   if (!settings.enabled) return yield* buildInitialDshProviderSnapshot(settings);
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
@@ -158,6 +167,7 @@ export const checkDshProviderStatus = Effect.fn("Dsh.checkStatus")(function* (
       { ...settings, customModels: [...configured.success, ...settings.customModels] },
       checkedAt,
       { auth, installed: true, version, status: "ready" },
+      { previousModels: previous?.version === version ? previous.models : undefined },
     );
   }
   const discovery = yield* probeConfiguration({ ...settings, binaryPath: binary }, env).pipe(

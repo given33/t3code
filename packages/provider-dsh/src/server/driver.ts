@@ -29,7 +29,7 @@ import type * as Acp from "effect-acp/compat";
 import { DshSettings, decodeDshSettings } from "../settings.ts";
 import { dshEnvironment, makeDshAcpRuntime } from "./acpSupport.ts";
 import { makeDshAdapterV2Driver, type DshAdapterV2DriverEnv } from "./adapter.ts";
-import { dshModels, modelOption } from "./catalog.ts";
+import { dshCatalog, modelOption } from "./catalog.ts";
 import { DSH_PROVIDER, buildInitialDshProviderSnapshot, checkDshProviderStatus } from "./status.ts";
 
 const decodePage = Schema.decodeEffect(AcpRegistryListSessionsResult);
@@ -155,16 +155,25 @@ export const DshDriver: ProviderDriver<DshSettings, DshDriverEnv> = {
       initialSnapshot: () => buildInitialDshProviderSnapshot(settings).pipe(Effect.map(stamp)),
       checkProvider: Effect.gen(function* () {
         const discover = yield* DiscoverProfile;
-        const checked = yield* checkDshProviderStatus(settings, environment, discover).pipe(
-          Effect.provide(services),
-        );
         const previous = yield* Ref.get(lastProbe);
+        const checked = yield* checkDshProviderStatus(
+          settings,
+          environment,
+          discover,
+          previous,
+        ).pipe(Effect.provide(services));
         if (discover || !checked.version || previous?.version !== checked.version)
           yield* Ref.set(lastProbe, discover ? checked : undefined);
         else if (previous && checked.status === "ready") {
           const known = new Set(previous.models.map((m) => m.slug));
+          const knownGroups = new Set(previous.subProviders?.map((group) => group.name));
+          const subProviders = [
+            ...(previous.subProviders ?? []),
+            ...(checked.subProviders ?? []).filter((group) => !knownGroups.has(group.name)),
+          ];
           return stamp({
             ...previous,
+            ...(subProviders.length ? { subProviders } : {}),
             checkedAt: checked.checkedAt,
             models: [...previous.models, ...checked.models.filter((m) => !known.has(m.slug))],
           });
@@ -181,7 +190,7 @@ export const DshDriver: ProviderDriver<DshSettings, DshDriverEnv> = {
                     current.installed && current.status === "ready"
                       ? publishSnapshot({
                           ...current,
-                          models: dshModels(settings, config, current.models),
+                          ...dshCatalog(settings, config, current.models, current.subProviders),
                         })
                       : Effect.void,
                   ),

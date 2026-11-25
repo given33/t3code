@@ -340,18 +340,20 @@ const resolveProfile = Effect.fn("Dsh.resolveProfile")(function* (
     }
     // Only the ACP agent can enumerate its built-in catalog. But explicit pi-ai routes are
     // self-describing, so the passive selector need not boot any profile hooks to show them.
-    const models: Array<{ slug: string; name: string }> = [];
+    const models: Array<{ slug: string; name: string; subProvider?: string }> = [];
     const routePlugin = inherited.get(pi) ?? active.get(pi);
     if (settings.syncLocalModels && !routePlugin?.disabled) {
       for (const [provider, profile] of Object.entries(
         fields(fields(routePlugin?.config).providers),
       )) {
-        const entries = fields(profile).models;
+        const { models: entries, name } = fields(profile);
+        const subProvider = typeof name === "string" ? name.trim() : undefined;
         if (!Array.isArray(entries)) continue;
         for (const model of entries) {
           if (record(model) && typeof model.id === "string" && model.id && provider) {
             models.push({
               slug: encodeRoute([provider, model.id]),
+              ...(subProvider ? { subProvider } : {}),
               name: typeof model.name === "string" && model.name ? model.name : model.id,
             });
           }

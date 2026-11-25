@@ -34,12 +34,13 @@ it.layer(nodeLayer)("DeepSeek Harness status", (it) => {
         yield* fs.makeDirectory(desktop, { recursive: true });
         yield* fs.writeFileString(
           path.join(desktop, "cordis.patch.yml"),
-          "- id: llm-pi-ai\n  config: {providers: {pixel: {models: [{id: flash, name: Pixel Flash}]}}}",
+          "- id: llm-pi-ai\n  config: {providers: {pixel: {models: [{id: deepseek-v4.1-flash, name: Pixel Flash}]}}}",
         );
         const snap = yield* checkDshProviderStatus(f.settings, f.environment, false);
-        expect(snap.models.map((m) => [m.slug, m.name])).toEqual([
-          ["default", "Harness default"],
-          ['["pixel","flash"]', "Pixel Flash"],
+        expect(snap.subProviders).toEqual([{ name: "pixel" }]);
+        expect(snap.models.map((m) => [m.slug, m.name, m.subProvider])).toEqual([
+          ["default", "Harness default", undefined],
+          ['["pixel","deepseek-v4.1-flash"]', "Pixel Flash", "pixel"],
         ]);
         expect((yield* f.log).map((e) => e.method)).toEqual(["version"]);
         expect(yield* fs.exists(path.join(f.directory, "profiles", f.settings.profile))).toBe(
@@ -86,10 +87,11 @@ it.layer(nodeLayer)("DeepSeek Harness status", (it) => {
         nativeSessions: { canList: true, canResume: true, canDelete: false, canLoad: false },
         supportedRuntimeModes: ["approval-required", "full-access"],
       });
-      expect(snapshot.models.map((m) => [m.slug, m.name, m.isDefault])).toEqual([
-        ["default", "Harness default", undefined],
-        ['["alpha","sample"]', "Sample (Alpha)", true],
-        ['["beta","sample"]', "Sample (Beta)", undefined],
+      expect(snapshot.subProviders).toEqual([{ name: "Alpha" }, { name: "Beta" }]);
+      expect(snapshot.models.map((m) => [m.slug, m.name, m.isDefault, m.subProvider])).toEqual([
+        ["default", "Harness default", undefined, undefined],
+        ['["alpha","sample"]', "Sample", true, "Alpha"],
+        ['["beta","sample"]', "Sample", undefined, "Beta"],
       ]);
       expect(snapshot.models[1]?.capabilities?.optionDescriptors).toMatchObject([
         {

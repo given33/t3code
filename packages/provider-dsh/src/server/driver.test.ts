@@ -10,7 +10,11 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
+import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import { ProviderAdapterV2RuntimePolicy } from "@t3tools/provider-core/server/ProviderAdapter";
@@ -52,7 +56,7 @@ it.layer(driverLayer)("DshDriver", (it) => {
     "publishes live, model-specific reasoning without changing the profile default and injects the thread HTTP MCP",
     () =>
       Effect.gen(function* () {
-        const f = yield* create("live");
+        const f = yield* create("live", "ok", { customModels: ["pixel/extra"] });
         expect(yield* f.instance.snapshot.refresh).toMatchObject({
           status: "ready",
           nativeSessions: { canList: true },
@@ -101,13 +105,65 @@ it.layer(driverLayer)("DshDriver", (it) => {
           runtimePolicy,
         });
         yield* session.ensureThread({ threadId, modelSelection, runtimePolicy });
-        expect((yield* Fiber.join(updated))[0]?.models.find((m) => m.isDefault)?.slug).toBe(
-          '["alpha","sample"]',
-        );
+        const [snapshot] = yield* Fiber.join(updated);
+        expect(snapshot?.models.find((m) => m.isDefault)?.slug).toBe('["alpha","sample"]');
+        expect(snapshot?.subProviders).toEqual([
+          { name: "Alpha" },
+          { name: "Beta" },
+          { name: "pixel" },
+        ]);
+        expect(snapshot?.models.map((m) => m.subProvider)).toEqual([
+          undefined,
+          "Alpha",
+          "Beta",
+          "pixel",
+        ]);
         expect(
           (yield* f.log).filter((e) => e.method === "session/new").map((e) => e.mcpTypes),
         ).toEqual([[], ["http"]]);
       }),
+  );
+  it.effect("merges a passive local catalog into the last probe with one group per provider", () =>
+    Effect.gen(function* () {
+      const host = yield* ProviderHost.ProviderHost;
+      const ready = yield* Deferred.make<void>();
+      const f = yield* create("merge").pipe(
+        Effect.provideService(ProviderHost.ProviderHost, {
+          ...host,
+          awaitServerReady: Deferred.await(ready),
+        }),
+      );
+      const probe = yield* f.instance.snapshot.refresh;
+      expect(probe.subProviders).toEqual([{ name: "Alpha" }, { name: "Beta" }]);
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const desktop = path.join(f.directory, "profiles", "desktop");
+      yield* fs.makeDirectory(desktop, { recursive: true });
+      yield* fs.writeFileString(
+        path.join(desktop, "cordis.patch.yml"),
+        "- id: llm-pi-ai\n  config: {providers: {alpha: {models: [{id: extra}]}, pixel: {name: ' Pixel Labs ', models: [{id: flash}]}}}",
+      );
+      const passive = yield* f.instance.snapshot.streamChanges.pipe(
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      yield* Deferred.succeed(ready, undefined);
+      const [snapshot] = yield* Fiber.join(passive);
+      expect(snapshot?.subProviders).toEqual([
+        { name: "Alpha" },
+        { name: "Beta" },
+        { name: "Pixel Labs" },
+      ]);
+      expect(snapshot?.models.map((m) => [m.slug, m.subProvider])).toEqual([
+        ["default", undefined],
+        ['["alpha","sample"]', "Alpha"],
+        ['["beta","sample"]', "Beta"],
+        ['["alpha","extra"]', "Alpha"],
+        ['["pixel","flash"]', "Pixel Labs"],
+      ]);
+      expect((yield* f.log).filter((e) => e.method === "session/new")).toHaveLength(1);
+    }),
   );
   it.effect("isolates instance identity, home, profile and discovery across refreshes", () =>
     Effect.gen(function* () {
@@ -208,6 +264,12 @@ it.layer(driverLayer)("DshDriver", (it) => {
         cwd: f.directory,
       });
       const modelSelection = { instanceId: f.instance.instanceId, model: "sample" };
+      const live = yield* f.instance.snapshot.streamChanges.pipe(
+        Stream.filter((s) => s.models.some((m) => m.slug === '["alpha","sample"]')),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkScoped({ startImmediately: true }),
+      );
       const session = yield* f.instance.orchestrationAdapter.openSession({
         threadId,
         providerSessionId: ProviderSessionId.make("dsh-overlay-session"),
@@ -215,6 +277,10 @@ it.layer(driverLayer)("DshDriver", (it) => {
         runtimePolicy,
       });
       yield* session.ensureThread({ threadId, modelSelection, runtimePolicy });
+      expect((yield* Fiber.join(live))[0]?.subProviders).toEqual([
+        { name: "Alpha" },
+        { name: "Beta" },
+      ]);
       const log = yield* f.log;
       const launches = log.filter((e) => e.method === "launch");
       expect(launches).toHaveLength(2);
