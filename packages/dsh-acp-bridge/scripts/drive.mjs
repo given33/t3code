@@ -179,7 +179,11 @@ const tokenCounters = [
   "cachedWriteTokens",
 ];
 
-export function normalize(trace, cwd, { liveUsage = false, t3Advertisements = false } = {}) {
+export function normalize(
+  trace,
+  cwd,
+  { liveUsage = false, t3Advertisements = false, t3TurnReset = false, pwshCommand } = {},
+) {
   const ids = new Map();
   function visit(v, key) {
     if (Array.isArray(v)) return v.map((item) => visit(item));
@@ -214,8 +218,50 @@ export function normalize(trace, cwd, { liveUsage = false, t3Advertisements = fa
     });
     NodeAssert.equal(expected.size, 0, "Missing T3 setup command advertisement");
   }
+  if (t3TurnReset) {
+    const sessionId = trace.find((m) => m.method === "session/new")?.result.sessionId;
+    let awaitingReset = false;
+    trace = trace.filter((m) => {
+      if (m.request === "session/prompt") {
+        NodeAssert.equal(m.params.sessionId, sessionId);
+        awaitingReset = true;
+      }
+      if (awaitingReset && m.method === "session/update") {
+        NodeAssert.deepEqual(
+          m.params,
+          { sessionId, update: { sessionUpdate: "plan", entries: [] } },
+          "Expected T3 turn/start to clear this session's plan before other updates",
+        );
+        awaitingReset = false;
+        return false;
+      }
+      if (m.method === "session/prompt")
+        NodeAssert.ok(!awaitingReset, "Missing T3 turn/start plan reset");
+      return true;
+    });
+  }
   const copy = visit(trace);
   delete copy.find((m) => m.method === "initialize").result.agentInfo;
+  if (pwshCommand) {
+    const updates = copy.filter((m) => m.method === "session/update").map((m) => m.params.update);
+    const calls = updates.filter((u) => u.sessionUpdate === "tool_call");
+    NodeAssert.equal(calls.length, 1, "Expected exactly one T3 pwsh call");
+    const [call] = calls;
+    NodeAssert.equal(call.kind, "execute");
+    NodeAssert.equal(call.title, pwshCommand);
+    NodeAssert.equal(call.rawInput.command, pwshCommand);
+    NodeAssert.equal(call.status, "pending");
+    Object.assign(call, { kind: "other", title: "pwsh", status: "in_progress" });
+    const result = updates.find(
+      (u) => u.sessionUpdate === "tool_call_update" && u.toolCallId === call.toolCallId,
+    );
+    NodeAssert.ok(result && result.content.length > 0);
+    NodeAssert.deepEqual(
+      result.content,
+      result.rawOutput.map((content) => ({ type: "content", content })),
+    );
+    delete result.rawOutput;
+  }
   if (liveUsage) {
     for (const msg of copy) {
       const update = msg.params?.update;

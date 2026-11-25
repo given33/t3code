@@ -1,4 +1,5 @@
 import * as NodeAssert from "node:assert/strict";
+import { checkOfflineParity } from "./e2e-offline.mjs";
 import { drive, normalize, withWorkspace } from "./drive.mjs";
 
 const routeOverride = process.env.T3_DSH_PARITY_MODEL;
@@ -47,7 +48,11 @@ async function runSide(bridgeEnabled, cwd) {
       );
     },
   });
-  return normalize(trace, cwd, { liveUsage: true, t3Advertisements: bridgeEnabled });
+  return normalize(trace, cwd, {
+    liveUsage: true,
+    t3Advertisements: bridgeEnabled,
+    t3TurnReset: bridgeEnabled,
+  });
 }
 
 async function main() {
@@ -71,6 +76,12 @@ async function main() {
   console.log(
     "expected: commands advertised only by T3 (session/new and session/resume, one each)",
   );
+  console.log(
+    "expected: T3 plan update clears entries at turn/start; official sends no plan. Additional plans remain in the comparison.",
+  );
+  console.log(
+    "expected: T3 uses presenter tool kind/title and pending status; official uses other/name and in_progress. The live prompt requests no tools; e2e-offline compares one real pwsh lifecycle.",
+  );
   const sizes = traces[0]
     .filter(
       (m) => m.method === "session/update" && m.params.update.sessionUpdate === "usage_update",
@@ -90,6 +101,7 @@ async function main() {
     `Parity OK: identical ordered messages (${sequence.length}), usage.size=${sizes.join(",")}`,
   );
   console.log(sequence.join(" "));
+  await checkOfflineParity();
 }
 
 await main();

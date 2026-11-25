@@ -55,7 +55,7 @@ export async function offlineProfile(root, bridgeEnabled, mock, extraPatch = [])
   return { variables, route };
 }
 
-export async function startMock({ textOnly = false, onModelInput } = {}) {
+export async function startMock({ textOnly = false, onModelInput, toolCalls } = {}) {
   const seen = new Map([
     ["Bearer offline-t3", []],
     ["Bearer offline-official", []],
@@ -71,19 +71,31 @@ export async function startMock({ textOnly = false, onModelInput } = {}) {
       NodeAssert.equal(body.model, modelId);
       NodeAssert.equal(body.stream, true);
       onModelInput?.(body.input);
-      const result = body.input.find((i) => i.type === "function_call_output");
-      const tool = body.tools.find((t) => t.name === "pwsh");
-      NodeAssert.ok(tool, `Missing pwsh (offered: ${body.tools.map((t) => t.name).join(", ")})`);
-      if (result)
-        NodeAssert.ok(
-          JSON.stringify(result.output).includes(fixture),
-          "Tool did not read the fixture",
-        );
       const requests = seen.get(req.headers.authorization);
       NodeAssert.ok(requests, "Expected an isolated offline credential");
-      const replyWithText = textOnly || result !== undefined;
+      const step = requests.length;
+      const results = body.input.filter((i) => i.type === "function_call_output");
+      const calls = toolCalls ?? [{ name: "pwsh", args: toolArgs }];
+      const call = textOnly ? undefined : calls[step];
+      if (!textOnly) {
+        NodeAssert.equal(results.length, step, "Expected a result for each previous tool call");
+        if (!toolCalls && step === 1)
+          NodeAssert.ok(
+            JSON.stringify(results[0].output).includes(fixture),
+            "Tool did not read the fixture",
+          );
+      }
+      const expectedName = call?.name ?? "pwsh";
+      NodeAssert.ok(
+        body.tools.some((t) => t.name === expectedName),
+        `Missing ${expectedName} (offered: ${body.tools.map((t) => t.name).join(", ")})`,
+      );
+      const replyWithText = !call;
       requests.push(replyWithText ? "text" : "tool");
-      NodeAssert.ok(requests.length <= (textOnly ? 3 : 2), "Unexpected additional model request");
+      NodeAssert.ok(
+        requests.length <= (textOnly ? 3 : calls.length + 1),
+        "Unexpected additional model request",
+      );
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
       let sequence = 0;
       const send = (type, fields) =>
@@ -102,9 +114,9 @@ export async function startMock({ textOnly = false, onModelInput } = {}) {
         ? { type: "message", id: "msg_offline", role: "assistant", content: [] }
         : {
             type: "function_call",
-            id: "fc_offline",
-            call_id: "call_offline",
-            name: tool.name,
+            id: `fc_offline_${step}`,
+            call_id: `call_offline_${step}`,
+            name: call.name,
             arguments: "",
           };
       send("response.output_item.added", {
@@ -124,7 +136,7 @@ export async function startMock({ textOnly = false, onModelInput } = {}) {
         send("response.output_text.done", { ...fields, content_index: 0, text: answer });
         send("response.content_part.done", { ...fields, content_index: 0, part: content });
       } else {
-        item.arguments = JSON.stringify(toolArgs);
+        item.arguments = JSON.stringify(call.args);
         send("response.function_call_arguments.delta", { ...fields, delta: item.arguments });
         send("response.function_call_arguments.done", { ...fields, arguments: item.arguments });
       }

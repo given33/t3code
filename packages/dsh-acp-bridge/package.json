@@ -8,6 +8,7 @@
     "build": "vp pack && node --experimental-vm-modules=true scripts/check-imports.mjs",
     "prepare": "vp pack && node --experimental-vm-modules=true scripts/check-imports.mjs",
     "test": "vp test run --config ../../vite.config.ts --dir .",
+    "test:tools": "node scripts/tools.mjs",
     "test:commands": "node scripts/commands.mjs",
     "test:parity": "node scripts/parity.mjs",
     "test:e2e": "node scripts/e2e-offline.mjs",

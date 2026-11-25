@@ -24,7 +24,7 @@ import { AcpContentError, admitAcpPrompt } from "./content.ts";
 import { turnEndToStopReason } from "./codec.ts";
 import { mountAcpMcpServers } from "./mcp.ts";
 import { AcpModelControl } from "./model-control.ts";
-import { assistantUpdates, toolCallUpdate, toolResultUpdate } from "./updates.ts";
+import { assistantUpdates, SessionActivityUpdates } from "./updates.ts";
 
 /** Inputs shared by fresh and resumed ACP session construction. */
 interface AcpSessionBuildOptions {
@@ -82,6 +82,7 @@ export class AcpSession {
   /** The exact top-level Agent owned by this ACP session. */
   readonly agent: Agent;
   private readonly modelControl: AcpModelControl;
+  private readonly activityUpdates: SessionActivityUpdates;
   private outputTail = Promise.resolve();
   private advertisedSkills = new Set<string>();
   private inflight: InflightPrompt | undefined;
@@ -90,9 +91,15 @@ export class AcpSession {
   private constructor(
     private readonly ctx: Context,
     handle: AgentHandle,
+    cwd: string,
     private readonly notify: (notification: SessionNotification) => Promise<void>,
   ) {
     this.agent = handle.agent;
+    this.activityUpdates = new SessionActivityUpdates(
+      ctx,
+      this.agent,
+      this.agent.session.header.cwd ?? cwd,
+    );
     this.modelControl = new AcpModelControl(ctx.llm, handle.agent.model);
     this.disposeAgent = () => handle.dispose();
   }
@@ -113,7 +120,7 @@ export class AcpSession {
       signal: options.signal,
       setup: (agentCtx) => composeAgent(agentCtx, options),
     });
-    return new AcpSession(ctx, handle, options.notify);
+    return new AcpSession(ctx, handle, options.cwd, options.notify);
   }
 
   /** Restore a persisted Agent and compose the request's fresh MCP connections. */
@@ -124,7 +131,7 @@ export class AcpSession {
       signal: options.signal,
       setup: (agentCtx) => composeAgent(agentCtx, options),
     });
-    return new AcpSession(ctx, handle, options.notify);
+    return new AcpSession(ctx, handle, options.cwd, options.notify);
   }
 
   /** Whether this module owns an exact Agent reference. */
@@ -395,29 +402,22 @@ export class AcpSession {
             `acp: assistant output conversion failed: ${dshRuntime().llm.errorChain(error)}`,
           );
         });
-      } else if (event.type === "tool/call") {
-        const previous = this.outputTail;
-        this.outputTail = previous
-          .then(() =>
-            this.notify({ sessionId: this.agent.session.id, update: toolCallUpdate(event) }),
-          )
+      } else if (
+        event.type === "tool/call" ||
+        event.type === "tool/result" ||
+        event.type === "todo/write" ||
+        event.type === "turn/start"
+      ) {
+        this.outputTail = this.outputTail
+          .then(async () => {
+            const update = await this.activityUpdates.project(event);
+            if ((event.type === "turn/start" || event.type === "todo/write") && this.closing)
+              return;
+            await this.notify({ sessionId: session.id, update });
+          })
           .catch((error: unknown) => {
             this.ctx.logger.warn(
-              `acp: tool-call update delivery failed: ${dshRuntime().llm.errorChain(error)}`,
-            );
-          });
-      } else if (event.type === "tool/result") {
-        const previous = this.outputTail;
-        this.outputTail = previous
-          .then(async () =>
-            this.notify({
-              sessionId: this.agent.session.id,
-              update: await toolResultUpdate(this.ctx, event),
-            }),
-          )
-          .catch((error: unknown) => {
-            this.ctx.logger.warn(
-              `acp: tool-result update delivery failed: ${dshRuntime().llm.errorChain(error)}`,
+              `acp: ${event.type} update delivery failed: ${dshRuntime().llm.errorChain(error)}`,
             );
           });
       }

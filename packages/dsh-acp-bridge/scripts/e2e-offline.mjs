@@ -12,7 +12,7 @@ import {
 } from "./mock-llm.mjs";
 import { drive, normalize, withWorkspace } from "./drive.mjs";
 
-await withWorkspace(async (root) => {
+async function runOfflineParity(root) {
   const mock = await startMock();
   try {
     const cwd = NodePath.join(root, "workspace");
@@ -27,7 +27,8 @@ await withWorkspace(async (root) => {
           variables,
           profile: "acp",
           allowPermission: (call) =>
-            call?.title === "pwsh" && call.rawInput?.command === toolArgs.command,
+            call?.title === (bridgeEnabled ? toolArgs.command : "pwsh") &&
+            call.rawInput?.command === toolArgs.command,
           async run({ request, configOptions, sessionId, trace, label }) {
             NodeAssert.equal(
               configOptions.find((o) => o.id === "model")?.currentValue,
@@ -43,7 +44,8 @@ await withWorkspace(async (root) => {
             );
             const calls = updates.filter((u) => u.sessionUpdate === "tool_call");
             NodeAssert.equal(calls.length, 1);
-            NodeAssert.equal(calls[0].title, "pwsh");
+            NodeAssert.equal(calls[0].title, bridgeEnabled ? toolArgs.command : "pwsh");
+            NodeAssert.equal(calls[0].kind, bridgeEnabled ? "execute" : "other");
             NodeAssert.deepEqual(calls[0].rawInput, toolArgs);
             const completed = updates.filter((u) => u.sessionUpdate === "tool_call_update");
             NodeAssert.equal(completed.length, 1);
@@ -56,11 +58,15 @@ await withWorkspace(async (root) => {
               .join("");
             NodeAssert.equal(text, answer);
             console.log(
-              `${label} agent_message_chunk=${JSON.stringify(text)} tool_call=pwsh tool_call_update=completed`,
+              `${label} agent_message_chunk=${JSON.stringify(text)} tool_call=pwsh kind=${calls[0].kind} status=${calls[0].status} tool_call_update=completed`,
             );
           },
         });
-        return normalize(trace, cwd, { t3Advertisements: bridgeEnabled });
+        return normalize(trace, cwd, {
+          t3Advertisements: bridgeEnabled,
+          t3TurnReset: bridgeEnabled,
+          pwshCommand: bridgeEnabled ? toolArgs.command : undefined,
+        });
       }),
     );
     if (mock.failure) throw mock.failure;
@@ -71,11 +77,15 @@ await withWorkspace(async (root) => {
     for (const requests of mock.seen.values()) NodeAssert.deepEqual(requests, ["tool", "text"]);
     NodeAssert.deepEqual(traces[0], traces[1]);
     console.log(
-      "Offline parity OK: identical ordered messages, streamed text, tool input/output and close (agentInfo and the two expected T3 setup advertisements accounted for).",
+      "Offline parity OK: identical ordered messages, streamed text, tool input/output and close (accounted for agentInfo, setup advertisements, turn/start plan reset and pwsh presentation).",
     );
   } catch (e) {
     throw mock.failure ?? e;
   } finally {
     await mock.close();
   }
-});
+}
+
+export const checkOfflineParity = () => withWorkspace(runOfflineParity);
+
+if (import.meta.main) await checkOfflineParity();

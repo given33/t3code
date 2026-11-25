@@ -72,7 +72,9 @@ interface EventData {
   "turn/start": { turn: number };
   "assistant/message": { turn: number; message: UserMessage; usage?: unknown };
   "tool/call": { callId: string; name: string; arguments: string };
+  "todo/write": { todos: { content: string; status: string }[] };
   "tool/result": {
+    meta?: unknown;
     message: { toolCallId: string; isError?: boolean; content: ContentBlock[] };
   };
   "turn/end": { turn: number; reason: TurnEndReason };
@@ -103,7 +105,41 @@ export interface AvailableCommand {
   description: string;
   input?: { hint: string };
 }
+type ToolKind = "read" | "edit" | "delete" | "move" | "search" | "execute" | "fetch" | "other";
+export interface FileLocation {
+  path: string;
+  line?: number;
+}
+export interface FileDiff {
+  path: string;
+  oldText: string | null;
+  newText: string;
+}
+export interface ToolDefinition {
+  presentCall?(args: unknown):
+    | {
+        card: "generic";
+        title: string;
+        kind?: ToolKind;
+        rawInput?: unknown;
+        content?: ContentBlock[];
+        locations?: FileLocation[];
+      }
+    | { card: "terminal"; title: string }
+    | { card: "diff"; title: string; diffs: FileDiff[]; locations?: FileLocation[] }
+    | undefined;
+  presentResult?(
+    args: unknown,
+    result: { content: ContentBlock[]; isError: boolean; meta?: unknown },
+  ):
+    | { card: "generic" | "read"; content?: ContentBlock[] }
+    | { card: "terminal"; output?: string }
+    | { card: "diff"; diffs: FileDiff[] }
+    | { card: "search" | "web" }
+    | undefined;
+}
 interface Services {
+  tools: { get(name: string, scope: Agent): ToolDefinition | undefined };
   commands: {
     list(agent: Agent): readonly AvailableCommand[];
     execute(
@@ -201,10 +237,10 @@ export interface SessionConfigOption {
   currentValue: string;
   options: SelectOption[] | { group: string; name: string; options: SelectOption[] }[];
 }
-export interface ToolCallContent {
-  type: "content";
-  content: AcpContentBlock;
-}
+export type ToolCallContent =
+  | { type: "content"; content: AcpContentBlock }
+  | ({ type: "diff" } & FileDiff);
+export type PlanStatus = "pending" | "in_progress" | "completed";
 export type SessionUpdate =
   | { sessionUpdate: "available_commands_update"; availableCommands: AvailableCommand[] }
   | {
@@ -216,15 +252,22 @@ export type SessionUpdate =
       sessionUpdate: "tool_call";
       toolCallId: string;
       title: string;
-      kind: "other";
-      status: "in_progress";
+      kind: ToolKind;
+      status: "pending";
+      locations?: FileLocation[];
+      content?: ToolCallContent[];
       rawInput: unknown;
     }
   | {
       sessionUpdate: "tool_call_update";
       toolCallId: string;
       status: "failed" | "completed";
+      rawOutput?: unknown;
       content: ToolCallContent[];
+    }
+  | {
+      sessionUpdate: "plan";
+      entries: { content: string; status: PlanStatus; priority: "medium" }[];
     }
   | { sessionUpdate: "usage_update"; used: number; size: number }
   | { sessionUpdate: "config_option_update"; configOptions: SessionConfigOption[] };

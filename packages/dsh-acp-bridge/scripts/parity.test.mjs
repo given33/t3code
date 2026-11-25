@@ -57,3 +57,28 @@ it("only accounts for one T3 advertisement per successful activation of the same
     ),
   ).toThrow();
 });
+
+it("accounts only for the first empty plan of the prompted session", () => {
+  const frame = (entries) => ({
+    method: "session/update",
+    params: { sessionId: "test", update: { sessionUpdate: "plan", entries } },
+  });
+  const start = [
+    { method: "initialize", result: { agentInfo: {} } },
+    { method: "session/new", result: { sessionId: "test" } },
+    { request: "session/prompt", params: { sessionId: "test" } },
+  ];
+  const end = { method: "session/prompt", result: { stopReason: "end_turn" } };
+  const normalized = (...plans) =>
+    normalize([...start, ...plans, end], process.cwd(), { t3TurnReset: true });
+  const official = normalize([...start, end], process.cwd());
+  expect(normalized(frame([]))).toEqual(official);
+  expect(normalized(frame([]), frame([]))).not.toEqual(official);
+  expect(() => normalized()).toThrow();
+  expect(() =>
+    normalized(frame([{ content: "unexpected", priority: "medium", status: "pending" }])),
+  ).toThrow();
+  const wrongSession = frame([]);
+  wrongSession.params.sessionId = "other";
+  expect(() => normalized(wrongSession)).toThrow();
+});
