@@ -50,6 +50,14 @@ const snapshot = (
       checkedAt,
       probe,
       models,
+      slashCommands: settings.enabled
+        ? [
+            { name: "compact", description: "Compact older conversation history" },
+            { name: "feedback", description: "Send feedback about DeepSeek Harness" },
+            { name: "goal", description: "Manage the current conversation goal" },
+            { name: "plan", description: "Work on a plan for the current task" },
+          ]
+        : [],
     }),
     supportsTextGeneration: false,
     ...(subProviders.length ? { subProviders } : {}),

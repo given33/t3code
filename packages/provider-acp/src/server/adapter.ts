@@ -117,10 +117,8 @@ import {
   flattenSelectChoices,
 } from "./sessionConfig.ts";
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
-import {
-  t3AcpPromptWithInstructions,
-  type T3AcpInstructionState,
-} from "@t3tools/provider-core/server/orchestrationInstructions";
+import type { T3AcpInstructionState } from "@t3tools/provider-core/server/orchestrationInstructions";
+import { acpTurnPrompt } from "./orchestrationInstructions.ts";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import type * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
@@ -422,6 +420,7 @@ interface AcpPromptOutcomeFailure {
 }
 
 export interface AcpAdapterV2Flavor {
+  readonly reinjectInstructionsEveryTurn?: boolean;
   readonly buildAttachmentPrompt?: (input: {
     readonly text: string;
     readonly attachments: ReadonlyArray<ChatAttachment>;
@@ -9290,12 +9289,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             deliveredContext,
             isNativeSlashCommand,
           );
-          const text = t3AcpPromptWithInstructions({
+          const text = acpTurnPrompt({
             prompt: messageText,
             state: instructionState,
-            ...(previousInstructionState === undefined || compactionMarker !== undefined
-              ? {}
-              : { previousState: previousInstructionState }),
+            previousState: previousInstructionState,
+            compacted: compactionMarker !== undefined,
+            reinjectInstructionsEveryTurn: flavor.reinjectInstructionsEveryTurn,
           });
           const sessionSetup = yield* Ref.get(activeSessionSetup);
           const runtimeInstructions = buildRuntimeInstructions({

@@ -83,6 +83,7 @@ it.layer(nodeLayer)("DeepSeek ACP adapter", (it) => {
           instanceId,
           selfInvocation: { command: "node", entrypoint: undefined },
         });
+        expect(flavor.reinjectInstructionsEveryTurn).toBe(true);
         expect(flavor.mcpOverHttp).toBe(true);
         expect(DshProviderCapabilitiesV2).toMatchObject({
           sessions: { supportsModelSwitchInSession: true },

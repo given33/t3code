@@ -133,6 +133,8 @@ export function dshFlavor(options: DshAdapterV2Options): AcpAdapterV2Flavor {
             : e,
         ),
       ),
+    // DSH ACP never reports compaction_update, so internal compaction can drop T3 instructions.
+    reinjectInstructionsEveryTurn: true,
     mcpOverHttp: true,
     promptFailure: dshPromptFailure,
     permissionDisposition: dshPermissionDisposition,

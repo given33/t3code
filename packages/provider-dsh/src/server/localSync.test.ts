@@ -43,12 +43,15 @@ const harness = Effect.fn(function* () {
     yield* fs.makeDirectory(path.dirname(file(profile)), { recursive: true });
     yield* fs.writeFileString(file(profile), text);
   });
-  const prepare = (input: Parameters<typeof decodeDshSettings>[0]) =>
-    prepareDshOverlay(decodeDshSettings(input), {}).pipe(
+  const prepare = (input: Parameters<typeof decodeDshSettings>[0], env: NodeJS.ProcessEnv = {}) =>
+    prepareDshOverlay(decodeDshSettings(input), env).pipe(
       Effect.provideService(HostProcess.HomeDirectory, home),
     );
-  const overlay = Effect.fn(function* (input: Parameters<typeof decodeDshSettings>[0]) {
-    const result = yield* prepare(input);
+  const overlay = Effect.fn(function* (
+    input: Parameters<typeof decodeDshSettings>[0],
+    env: NodeJS.ProcessEnv = {},
+  ) {
+    const result = yield* prepare(input, env);
     if (!result) return [];
     return yield* decodeOverlay(yield* fs.readFileString(result));
   });
@@ -308,6 +311,43 @@ it.layer(nodeLayer)("DSH profile overlays", (it) => {
         });
         expect(yield* f.fs.readFileString(f.file("desktop"))).toBe(text);
         expect(yield* f.fs.readFileString(f.file("acp"))).not.toBe(text);
+      }),
+  );
+  it.effect(
+    "restores displaced skill roots only for a role override and preserves the active profile",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* harness();
+        const agents = f.path.join(f.home, ".agents", "skills");
+        const dsh = f.path.join(f.home, ".dsh", "skills");
+        const role = f.path.join(f.home, "role");
+        const env = { DSH_AGENTS_HOME: role };
+        const text =
+          "- id: skill-filesystem\n  config: {customSkillDirs: [external, '~/.agents/skills'], includeDefaultRoots: true, watch: false, watchDebounceMs: !!js customDelay}";
+        yield* f.put("acp", text);
+        yield* f.fs.makeDirectory(agents, { recursive: true });
+        expect(yield* f.overlay({ syncLocalModels: false })).toEqual([]);
+        const roleRow = { id: "agent-instructions", config: { maxBytes: 65536, dshHome: role } };
+        expect(yield* f.overlay({ syncLocalModels: false }, env)).toEqual([roleRow]);
+        yield* f.fs.makeDirectory(dsh, { recursive: true });
+        expect(yield* f.overlay({ syncLocalModels: false }, env)).toEqual([
+          roleRow,
+          {
+            id: "skill-filesystem",
+            config: {
+              customSkillDirs: ["external", "~/.agents/skills", dsh],
+              includeDefaultRoots: true,
+              watch: false,
+              watchDebounceMs: { __jsExpr: "customDelay" },
+            },
+          },
+        ]);
+        expect(yield* f.fs.readFileString(f.file("acp"))).toBe(text);
+        yield* f.put("acp", "[]");
+        expect(yield* f.overlay({}, env)).toEqual([
+          roleRow,
+          { id: "skill-filesystem", config: { customSkillDirs: [agents, dsh] } },
+        ]);
       }),
   );
   it.effect(

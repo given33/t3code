@@ -11,6 +11,7 @@ import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderS
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -52,6 +53,65 @@ const create = Effect.fn(function* (
 });
 
 it.layer(driverLayer)("DshDriver", (it) => {
+  it.effect(
+    "lists workspace skills without advertising commands, launching DSH or writing the profile",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-dsh-workspace-" });
+        const cwd = path.join(home, "project");
+        const f = yield* create("skills", "ok", {
+          syncToLocalDsh: true,
+          customProviderId: "sample",
+          customProviderBaseUrl: "https://sample.example",
+          customModels: ["sample/model"],
+        }).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
+        const put = Effect.fn(function* (file: string, text: string) {
+          yield* fs.makeDirectory(path.dirname(file), { recursive: true });
+          yield* fs.writeFileString(file, text);
+          return file;
+        });
+        const name = "reverse-engineer-anything";
+        const skill = `---\r\nname: ${name}\r\ndescription: >-\r\n  Inspect shipped\r\n  artifacts.\r\n---\r\nBody`;
+        const user = yield* put(path.join(home, ".agents", "skills", name, "SKILL.md"), skill);
+        const project = yield* put(path.join(cwd, ".agents", "skills", "alias.md"), skill);
+        const custom = yield* put(path.join(cwd, "custom", "hello.md"), "---\nname: hello\n---\n");
+        yield* put(path.join(cwd, "custom", "missing.md"), "no frontmatter");
+        yield* put(path.join(cwd, "custom", "invalid.md"), "---\nname: [\n---\n");
+        const patch = "- id: skill-filesystem\n  config: { customSkillDirs: [custom] }";
+        const profile = yield* put(
+          path.join(f.directory, "profiles", "skills", "cordis.patch.yml"),
+          patch,
+        );
+        const machine = yield* f.instance.snapshot.getSnapshot;
+        expect(machine.slashCommands).toEqual([]);
+        const log = yield* f.log;
+        if (!f.instance.snapshotForCwd) throw new Error("missing workspace snapshot");
+        const workspace = yield* f.instance.snapshotForCwd(cwd);
+        expect(workspace.slashCommandsPending).toBeUndefined();
+        expect(workspace.slashCommands).toEqual(machine.slashCommands);
+        expect(workspace.skills).toEqual([
+          {
+            name,
+            description: "Inspect shipped artifacts.",
+            path: project,
+            scope: "project",
+            enabled: true,
+          },
+          {
+            name,
+            description: "Inspect shipped artifacts.",
+            path: user,
+            scope: "user",
+            enabled: true,
+          },
+          { name: "hello", path: custom, scope: "user", enabled: true },
+        ]);
+        expect(yield* f.log).toEqual(log);
+        expect(yield* fs.readFileString(profile)).toBe(patch);
+      }),
+  );
   it.effect(
     "publishes live, model-specific reasoning without changing the profile default and injects the thread HTTP MCP",
     () =>

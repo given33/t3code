@@ -29,6 +29,7 @@ import type * as Acp from "effect-acp/compat";
 import { DshSettings, decodeDshSettings } from "../settings.ts";
 import { dshEnvironment, makeDshAcpRuntime } from "./acpSupport.ts";
 import { makeDshAdapterV2Driver, type DshAdapterV2DriverEnv } from "./adapter.ts";
+import { discoverDshSkills } from "./skills.ts";
 import { dshCatalog, modelOption } from "./catalog.ts";
 import { DSH_PROVIDER, buildInitialDshProviderSnapshot, checkDshProviderStatus } from "./status.ts";
 
@@ -215,6 +216,24 @@ export const DshDriver: ProviderDriver<DshSettings, DshDriverEnv> = {
       accentColor,
       enabled,
       snapshot: { ...snapshot, refresh },
+      snapshotForCwd: Effect.fn("Dsh.snapshotForCwd")(function* (cwd: string) {
+        const machine = yield* snapshot.getSnapshot;
+        const skills = enabled
+          ? yield* discoverDshSkills(settings, environment, cwd).pipe(
+              Effect.provide(services),
+              Effect.mapError(
+                (cause) =>
+                  new ProviderDriverError({
+                    driver: DSH_PROVIDER,
+                    instanceId,
+                    detail: "Failed to read DeepSeek Harness skill roots.",
+                    cause,
+                  }),
+              ),
+            )
+          : [];
+        return { ...machine, skills, slashCommandsPending: false };
+      }),
       refreshModels: () => Effect.asVoid(refresh),
       orchestrationAdapter: adapter,
       textGeneration: unsupportedTextGeneration,

@@ -240,7 +240,7 @@ const persistProvider = Effect.fn("Dsh.persistCustomProvider")(function* (
   yield* writeFileStringAtomically({ filePath: file, contents: text });
 });
 
-const resolveProfile = Effect.fn("Dsh.resolveProfile")(function* (
+const profileLocation = Effect.fn("Dsh.profileLocation")(function* (
   settings: DshSettings,
   environment: NodeJS.ProcessEnv,
 ) {
@@ -258,10 +258,111 @@ const resolveProfile = Effect.fn("Dsh.resolveProfile")(function* (
     /^(?:CON|NUL|PRN|AUX|COM[1-9]|LPT[1-9])(?:\.|$)/iu.test(profile)
   )
     return yield* invalid("Invalid DSH profile directory name.");
+  return { home, root, profile, target: path.join(root, profile, filename) };
+});
+
+const skillFilesystem = Effect.fn("Dsh.skillFilesystem")(function* (
+  rows: unknown[],
+  environment: NodeJS.ProcessEnv,
+  home: string,
+  dshHome: string,
+) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  const entries = rows.filter(
+    (r): r is Row => record(r) && !r.insert && pluginId(r) === "skill-filesystem",
+  );
+  // Cordis config is replaced as a unit, whereas a later disabled-only row retains it.
+  const config = fields(entries.findLast((r) => Object.hasOwn(r, "config"))?.config);
+  const enabled = !entries.findLast((r) => Object.hasOwn(r, "disabled"))?.disabled;
+  const existing: unknown = config.customSkillDirs;
+  const customSkillDirs: unknown[] = Array.isArray(existing) ? [...existing] : [];
+  const includeDefaultRoots = config.includeDefaultRoots !== false;
+  const userAgents = path.join(home, ".agents");
+  const agentsHome =
+    typeof config.agentsHome === "string"
+      ? config.agentsHome
+      : environment.DSH_AGENTS_HOME || userAgents;
+  const skillDshHome = typeof config.dshHome === "string" ? config.dshHome : dshHome;
+  const userRoots = [agentsHome, skillDshHome].map((dir) =>
+    path.resolve(expandHomePath(dir, home), "skills"),
+  );
+  let patch: Row | undefined;
+  // An expression-valued list cannot be safely extended without evaluating user code.
+  if (
+    enabled &&
+    environment.DSH_AGENTS_HOME &&
+    includeDefaultRoots &&
+    !Object.hasOwn(config, "__jsExpr") &&
+    (existing === undefined || Array.isArray(existing))
+  ) {
+    for (const dir of [path.join(userAgents, "skills"), path.join(dshHome, "skills")]) {
+      if (
+        customSkillDirs.some(
+          (entry) =>
+            typeof entry === "string" &&
+            path.isAbsolute(expandHomePath(entry, home)) &&
+            path.relative(expandHomePath(entry, home), dir) === "",
+        )
+      )
+        continue;
+      const info = yield* fs.stat(dir).pipe(Effect.orElseSucceed(() => undefined));
+      if (info?.type === "Directory") {
+        customSkillDirs.push(dir);
+        patch = { id: "skill-filesystem", config: { ...config, customSkillDirs } };
+      }
+    }
+  }
+  return {
+    enabled,
+    includeDefaultRoots,
+    userRoots,
+    customSkillDirs: customSkillDirs.filter(
+      (dir): dir is string => typeof dir === "string" && !!dir.trim(),
+    ),
+    patch,
+  };
+});
+
+export const readDshSkillRoots = Effect.fn("Dsh.readSkillRoots")(function* (
+  settings: DshSettings,
+  environment: NodeJS.ProcessEnv,
+  cwd: string,
+) {
+  const path = yield* Path.Path;
+  const { home, root, target } = yield* profileLocation(settings, environment);
+  const { rows } = yield* readPatch(target);
+  const { enabled, includeDefaultRoots, userRoots, customSkillDirs } = yield* skillFilesystem(
+    rows,
+    environment,
+    home,
+    path.dirname(root),
+  );
+  if (!enabled) return [];
+  return [
+    ...(includeDefaultRoots
+      ? [".dsh", ".agents"].map((dir) => ({
+          directory: path.join(cwd, dir, "skills"),
+          scope: "project",
+        }))
+      : []),
+    ...(includeDefaultRoots ? userRoots.map((directory) => ({ directory, scope: "user" })) : []),
+    ...customSkillDirs.map((dir) => ({
+      directory: path.resolve(cwd, expandHomePath(dir, home)),
+      scope: "user",
+    })),
+  ];
+});
+
+const resolveProfile = Effect.fn("Dsh.resolveProfile")(function* (
+  settings: DshSettings,
+  environment: NodeJS.ProcessEnv,
+) {
+  const path = yield* Path.Path;
+  const { home, root, profile, target } = yield* profileLocation(settings, environment);
+  const instructionsHome = settings.instructionsHome || environment.DSH_AGENTS_HOME;
   const custom = yield* customProvider(settings);
-  if (!settings.syncLocalModels && !custom && !settings.instructionsHome)
-    return { overlay: [], models: [] };
-  const target = path.join(root, profile, filename);
+  if (!settings.syncLocalModels && !custom && !instructionsHome) return { overlay: [], models: [] };
   const write = settings.syncToLocalDsh && custom && profile.toLowerCase() !== "desktop";
   const load = Effect.gen(function* () {
     if (write) yield* assertWriteTarget(target);
@@ -323,8 +424,8 @@ const resolveProfile = Effect.fn("Dsh.resolveProfile")(function* (
       // ACP uses its own default; patch only config so Cordis retains the startup injection.
       overlay.push({ id: "acp", config: { provider, model } });
     }
-    if (settings.instructionsHome) {
-      const dir = path.resolve(expandHomePath(settings.instructionsHome, home));
+    if (instructionsHome) {
+      const dir = path.resolve(expandHomePath(instructionsHome, home));
       const row = current.rows.findLast(
         (r) => record(r) && r.id === "agent-instructions" && Object.hasOwn(r, "config"),
       );
@@ -337,6 +438,10 @@ const resolveProfile = Effect.fn("Dsh.resolveProfile")(function* (
           dshHome: path.basename(dir) === "AGENTS.md" ? path.dirname(dir) : dir,
         },
       });
+    }
+    if (environment.DSH_AGENTS_HOME) {
+      const { patch } = yield* skillFilesystem(current.rows, environment, home, path.dirname(root));
+      if (patch) overlay.push(patch);
     }
     // Only the ACP agent can enumerate its built-in catalog. But explicit pi-ai routes are
     // self-describing, so the passive selector need not boot any profile hooks to show them.
