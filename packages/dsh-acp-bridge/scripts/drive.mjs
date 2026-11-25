@@ -4,6 +4,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
+import { makeProviderFailure } from "../../provider-core/src/server/failure.ts";
 import { withDshLaunch } from "../../provider-dsh/scripts/parity-launch.mjs";
 
 export async function withWorkspace(run) {
@@ -12,19 +13,6 @@ export async function withWorkspace(run) {
     return await run(root);
   } finally {
     await NodeFSP.rm(root, { recursive: true, force: true, maxRetries: 3 });
-  }
-}
-
-class RpcError extends Error {
-  constructor(method, error) {
-    // DSH may include request details in upstream errors. Keep only safe provider diagnostics.
-    const diagnostic = String(error.message)
-      .match(
-        /insufficient balance|insufficient_quota|missing API key|no API key|unauthorized|authentication failed|invalid API key|not logged in|invalid authentication|rate limit|connection error|fetch failed|\b(?:401|402|403|429|502|503)\b/gi,
-      )
-      ?.join(", ");
-    super(`${method} RPC ${error.code}${diagnostic ? ` (${diagnostic})` : ""}`);
-    this.providerUnavailable = !!diagnostic;
   }
 }
 
@@ -89,7 +77,10 @@ export async function drive({
             NodeAssert.ok(pending, "Unexpected JSON-RPC response");
             NodeAssert.equal(msg.id, pending.id);
             if (msg.error) {
-              const err = new RpcError(pending.method, msg.error);
+              const { message } = makeProviderFailure({
+                message: `${pending.method} RPC ${msg.error.code}: ${msg.error.message}`,
+              });
+              const err = new Error(message);
               trace.push({ method: pending.method, error: err.message });
               pending.reject(err);
             } else {
@@ -178,9 +169,17 @@ export async function drive({
   );
 }
 
-// Preserve ID equality/reuse and all tool payloads. Only generated identities, the
-// isolated workspace path and the declared implementation identity differ by design.
-export function normalize(trace, cwd) {
+const tokenCounters = [
+  "used",
+  "totalTokens",
+  "inputTokens",
+  "outputTokens",
+  "thoughtTokens",
+  "cachedReadTokens",
+  "cachedWriteTokens",
+];
+
+export function normalize(trace, cwd, { liveUsage = false } = {}) {
   const ids = new Map();
   function visit(v, key) {
     if (Array.isArray(v)) return v.map((item) => visit(item));
@@ -196,5 +195,20 @@ export function normalize(trace, cwd) {
   }
   const copy = visit(trace);
   delete copy.find((m) => m.method === "initialize").result.agentInfo;
+  if (liveUsage) {
+    for (const msg of copy) {
+      const update = msg.params?.update;
+      const usage =
+        msg.method === "session/update" && update?.sessionUpdate === "usage_update"
+          ? update
+          : msg.method === "session/prompt"
+            ? msg.result?.usage
+            : undefined;
+      if (!usage) continue;
+      for (const key of tokenCounters) {
+        if (typeof usage[key] === "number") usage[key] = "<usage>";
+      }
+    }
+  }
   return copy;
 }
