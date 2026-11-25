@@ -1,0 +1,106 @@
+import * as NodeAssert from "node:assert/strict";
+import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
+import { answer, fileName, fixture, modelId, startMock, toolArgs } from "./mock-llm.mjs";
+import { drive, normalize, withWorkspace } from "./drive.mjs";
+
+await withWorkspace(async (root) => {
+  const mock = await startMock();
+  try {
+    const cwd = NodePath.join(root, "workspace");
+    await NodeFSP.mkdir(cwd);
+    await NodeFSP.writeFile(NodePath.join(cwd, fileName), fixture);
+    const runs = await Promise.allSettled(
+      [false, true].map(async (bridgeEnabled) => {
+        const home = NodePath.join(root, bridgeEnabled ? "t3" : "official");
+        const profile = NodePath.join(home, "profiles", "acp");
+        await NodeFSP.mkdir(profile, { recursive: true });
+        const route = { provider: "t3-offline", model: modelId };
+        // The base profile already registers pi-ai. Replace it to avoid duplicate adapter declarations.
+        const patch = [
+          { id: "llm-pi-ai", disabled: true },
+          {
+            insert: [
+              {
+                id: "offline-model",
+                name: "@deepseek-ai/dsh-llm-pi-ai",
+                config: {
+                  providers: {
+                    [route.provider]: {
+                      api: "openai-responses",
+                      apiKeyEnv: "T3_OFFLINE_KEY",
+                      baseURL: mock.url,
+                      models: [{ id: modelId, name: "Offline" }],
+                    },
+                  },
+                },
+              },
+            ],
+          },
+          { id: "agent-default-model", config: route },
+          { id: "acp", config: route },
+        ];
+        await NodeFSP.writeFile(NodePath.join(profile, "cordis.patch.yml"), JSON.stringify(patch));
+        const variables = [
+          { name: "DSH_HOME", value: home },
+          { name: "DSH_TELEMETRY_DISABLED", value: "1" },
+          { name: "T3_OFFLINE_KEY", value: bridgeEnabled ? "offline-t3" : "offline-official" },
+        ];
+        const { trace } = await drive({
+          bridgeEnabled,
+          cwd,
+          variables,
+          profile: "acp",
+          allowPermission: (call) =>
+            call?.title === "pwsh" && call.rawInput?.command === toolArgs.command,
+          async run({ request, configOptions, sessionId, trace, label }) {
+            NodeAssert.equal(
+              configOptions.find((o) => o.id === "model")?.currentValue,
+              JSON.stringify([route.provider, modelId]),
+            );
+            const reply = await request("session/prompt", {
+              sessionId,
+              prompt: [{ type: "text", text: "Read the test fixture, then respond." }],
+            });
+            NodeAssert.equal(reply.stopReason, "end_turn");
+            const updates = trace.flatMap((m) =>
+              m.method === "session/update" ? [m.params.update] : [],
+            );
+            const calls = updates.filter((u) => u.sessionUpdate === "tool_call");
+            NodeAssert.equal(calls.length, 1);
+            NodeAssert.equal(calls[0].title, "pwsh");
+            NodeAssert.deepEqual(calls[0].rawInput, toolArgs);
+            const completed = updates.filter((u) => u.sessionUpdate === "tool_call_update");
+            NodeAssert.equal(completed.length, 1);
+            NodeAssert.equal(completed[0].toolCallId, calls[0].toolCallId);
+            NodeAssert.equal(completed[0].status, "completed");
+            NodeAssert.ok(JSON.stringify(completed[0].content).includes(fixture));
+            const text = updates
+              .filter((u) => u.sessionUpdate === "agent_message_chunk")
+              .map((u) => u.content.text)
+              .join("");
+            NodeAssert.equal(text, answer);
+            console.log(
+              `${label} agent_message_chunk=${JSON.stringify(text)} tool_call=pwsh tool_call_update=completed`,
+            );
+          },
+        });
+        return normalize(trace, cwd);
+      }),
+    );
+    if (mock.failure) throw mock.failure;
+    const traces = runs.map((result) => {
+      if (result.status === "rejected") throw result.reason;
+      return result.value;
+    });
+    for (const requests of mock.seen.values()) NodeAssert.deepEqual(requests, ["tool", "text"]);
+    NodeAssert.deepEqual(traces[0], traces[1]);
+    console.log(
+      "Offline parity OK: identical ordered messages, streamed text, tool input/output and close (agentInfo excluded).",
+    );
+  } catch (e) {
+    throw mock.failure ?? e;
+  } finally {
+    await mock.close();
+  }
+});

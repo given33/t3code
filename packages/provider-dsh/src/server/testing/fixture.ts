@@ -41,7 +41,12 @@ export const fixture = Effect.fn("DshTest.fixture")(function* (scenario = "ok") 
     env: { DSH_TEST_LOG: file, DSH_TEST_CASE: scenario },
   });
   yield* fs.writeFileString(file, "");
-  const settings = decodeDshSettings({ enabled: true, binaryPath, profile: "test-acp" });
+  const settings = decodeDshSettings({
+    enabled: true,
+    bridgeEnabled: false,
+    binaryPath,
+    profile: "test-acp",
+  });
   const environment = { ...(yield* HostProcess.Environment), DSH_HOME: directory };
   return {
     directory,

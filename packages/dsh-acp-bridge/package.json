@@ -1,0 +1,19 @@
+{
+  "name": "@t3tools/dsh-acp-bridge",
+  "version": "0.1.0-t3",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "vp pack && node --experimental-vm-modules=true scripts/check-imports.mjs",
+    "prepare": "vp pack && node --experimental-vm-modules=true scripts/check-imports.mjs",
+    "test": "vp test run --config ../../vite.config.ts --dir .",
+    "test:parity": "node scripts/parity.mjs",
+    "test:e2e": "node scripts/e2e-offline.mjs",
+    "typecheck": "effect-tsgo tsrs --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

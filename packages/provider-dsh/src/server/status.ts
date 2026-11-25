@@ -19,8 +19,14 @@ import * as Schema from "effect/Schema";
 import * as ChildProcess from "effect/process/ChildProcess";
 import { AcpRequestError } from "effect-acp/errors";
 import type { DshSettings } from "../settings.ts";
-import { DSH_SUPPORTED_RUNTIME_MODES, makeDshAcpRuntime, resolveDshBinary } from "./acpSupport.ts";
-import { configuredDshModels } from "./localSync.ts";
+import {
+  DSH_SUPPORTED_RUNTIME_MODES,
+  makeDshAcpRuntime,
+  resolveDshBinary,
+  dshInvocation,
+  isDshAgent,
+} from "./acpSupport.ts";
+import { configuredDshModels, locateDshBridge } from "./localSync.ts";
 import { dshCatalog } from "./catalog.ts";
 
 const isRequestError = Schema.is(AcpRequestError);
@@ -50,14 +56,7 @@ const snapshot = (
       checkedAt,
       probe,
       models,
-      slashCommands: settings.enabled
-        ? [
-            { name: "compact", description: "Compact older conversation history" },
-            { name: "feedback", description: "Send feedback about DeepSeek Harness" },
-            { name: "goal", description: "Manage the current conversation goal" },
-            { name: "plan", description: "Work on a plan for the current task" },
-          ]
-        : [],
+      slashCommands: [],
     }),
     supportsTextGeneration: false,
     ...(subProviders.length ? { subProviders } : {}),
@@ -105,7 +104,7 @@ const probeConfiguration = Effect.fn("Dsh.probeConfiguration")(function* (
     authenticateOnAuthRequired: false,
   });
   const initialized = yield* runtime.initialize();
-  if (initialized.agentInfo?.name !== "deepseek-harness-acp")
+  if (!isDshAgent(initialized.agentInfo?.name))
     return yield* AcpRequestError.invalidRequest("The configured CLI is not DeepSeek Harness ACP.");
   const capabilities = initialized.agentCapabilities?.sessionCapabilities;
   const started = yield* runtime.start();
@@ -133,12 +132,15 @@ export const checkDshProviderStatus = Effect.fn("Dsh.checkStatus")(function* (
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const env = providerProbeEnvironment(environment);
   const binary = yield* resolveDshBinary(settings.binaryPath, env);
-  const command = yield* resolveSpawnCommand(binary, ["--version"], { env });
+  const launch = dshInvocation(binary, env);
+  const command = yield* resolveSpawnCommand(launch.command, [...launch.args, "--version"], {
+    env: launch.env,
+  });
   const result = yield* spawnAndCollect(
     binary,
     ChildProcess.make(command.command, command.args, {
       shell: command.shell,
-      env,
+      env: launch.env,
       extendEnv: false,
     }),
   ).pipe(Effect.timeout(resolveProviderProbeTimeoutMs("dsh", 10_000, env)), Effect.result);
@@ -159,6 +161,15 @@ export const checkDshProviderStatus = Effect.fn("Dsh.checkStatus")(function* (
         ? "DeepSeek Harness was not found. Install the desktop app or configure Binary path."
         : "Could not verify `dsh --version`. Check that Binary path points to DeepSeek Harness, not the unrelated npm dsh package.",
     });
+  const { warning } = yield* locateDshBridge(settings, env);
+  const health = {
+    auth,
+    installed: true,
+    version,
+    ...(warning
+      ? ({ status: "warning", message: warning } as const)
+      : ({ status: "ready" } as const)),
+  };
   if (!discover) {
     const configured = yield* configuredDshModels(settings, env).pipe(Effect.result);
     if (Result.isFailure(configured))
@@ -174,7 +185,7 @@ export const checkDshProviderStatus = Effect.fn("Dsh.checkStatus")(function* (
     return snapshot(
       { ...settings, customModels: [...configured.success, ...settings.customModels] },
       checkedAt,
-      { auth, installed: true, version, status: "ready" },
+      health,
       { previousModels: previous?.version === version ? previous.models : undefined },
     );
   }
@@ -195,13 +206,8 @@ export const checkDshProviderStatus = Effect.fn("Dsh.checkStatus")(function* (
       installed: true,
       version,
       status: "warning",
-      message: `DeepSeek Harness is installed, but the isolated ACP probe ${reason}. Check the CLI binary and ACP profile.`,
+      message: `DeepSeek Harness is installed, but the isolated ACP probe ${reason}. Check the CLI binary and ACP profile.${warning ? ` ${warning}` : ""}`,
     });
   }
-  return snapshot(
-    settings,
-    checkedAt,
-    { auth, installed: true, version, status: "ready" },
-    discovery.success,
-  );
+  return snapshot(settings, checkedAt, health, discovery.success);
 });

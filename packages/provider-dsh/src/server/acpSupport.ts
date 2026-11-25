@@ -11,12 +11,16 @@ import {
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type * as Acp from "effect-acp/compat";
-import { isCustomKeyEnv, prepareDshOverlay } from "./localSync.ts";
+import { prepareDshLaunch } from "./launch.ts";
+export { resolveDshBinary, dshInvocation } from "./launch.ts";
+import { isCustomKeyEnv } from "./localSync.ts";
 import { DEFAULT_CUSTOM_KEY_ENV, type DshSettings } from "../settings.ts";
+
+export const isDshAgent = (name: string | undefined) =>
+  name === "deepseek-harness-acp" || name === "t3-deepseek-harness-acp";
 
 export const DSH_SUPPORTED_RUNTIME_MODES = [
   "approval-required",
@@ -40,41 +44,6 @@ export const dshEnvironment = Effect.fn("Dsh.environment")(function* (
     ...environment,
     DSH_HOME: expandHomePath(environment.DSH_HOME, yield* HostProcess.HomeDirectory),
   };
-});
-
-export const resolveDshBinary = Effect.fn("Dsh.resolveBinary")(function* (
-  binaryPath: string,
-  environment: NodeJS.ProcessEnv,
-) {
-  const home = yield* HostProcess.HomeDirectory;
-  const explicit = binaryPath.trim();
-  if (explicit && explicit !== "dsh") return expandHomePath(explicit, home);
-  const platform = yield* HostProcess.Platform;
-  const resolve = yield* SpawnExecutableResolution;
-  const find = (candidate: string) =>
-    Effect.promise(async () => resolve(candidate, platform, environment));
-  const fromPath = yield* find("dsh");
-  // infusion/node-dsh also installs a roaming npm shim with this name. Prefer the desktop CLI over that ambiguous shim.
-  if (
-    fromPath &&
-    !(platform === "win32" && /[\\/]AppData[\\/]Roaming[\\/]npm[\\/]dsh\.cmd$/iu.test(fromPath))
-  )
-    return fromPath;
-  const candidates =
-    platform === "win32"
-      ? [
-          `${environment.LOCALAPPDATA || `${home}\\AppData\\Local`}\\Programs\\DeepSeek Harness\\resources\\runtime\\cli\\bin\\dsh.cmd`,
-        ]
-      : platform === "darwin"
-        ? ["/Applications", `${home}/Applications`].map(
-            (root) => `${root}/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh`,
-          )
-        : [];
-  for (const candidate of candidates) {
-    const found = yield* find(candidate);
-    if (found) return found;
-  }
-  return fromPath ?? "dsh";
 });
 
 export function dshApprovalOptions(
@@ -118,21 +87,13 @@ export const makeDshAcpRuntime = Effect.fn("Dsh.makeAcpRuntime")(function* ({
   probePatchPath,
   ...options
 }: DshAcpRuntimeInput) {
-  const command = yield* resolveDshBinary(settings.binaryPath, environment);
-  const overlay = yield* prepareDshOverlay(settings, environment);
+  const launch = yield* prepareDshLaunch(settings, environment, probePatchPath);
   const context = yield* Layer.build(
     AcpSessionRuntime.layer({
       ...options,
       cancelBehavior: "wait-for-prompt",
       spawn: {
-        command,
-        args: [
-          "--profile",
-          settings.profile.trim() || "acp",
-          ...(overlay ? ["--patch", overlay] : []),
-          ...(probePatchPath ? ["--patch", probePatchPath] : []),
-        ],
-        env: environment,
+        ...launch,
         extendEnv: false,
         cwd: options.cwd,
       },

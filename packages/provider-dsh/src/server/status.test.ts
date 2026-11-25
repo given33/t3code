@@ -11,6 +11,30 @@ import { fixture, nodeLayer } from "./testing/fixture.ts";
 
 it.layer(nodeLayer)("DeepSeek Harness status", (it) => {
   it.effect(
+    "warns when the bridge artifact is missing and retains the official probe and its models",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        const file = (yield* Path.Path).join(f.directory, "missing-bridge.mjs");
+        for (const discover of [false, true]) {
+          const result = yield* checkDshProviderStatus(
+            { ...f.settings, bridgeEnabled: true },
+            { ...f.environment, T3_DSH_BRIDGE_PATH: file },
+            discover,
+          );
+          expect(result).toMatchObject({
+            status: "warning",
+            slashCommands: [],
+            message: expect.stringContaining(`${file}. Using the official`),
+          });
+          if (discover) expect(result.nativeSessions?.canResume).toBe(true);
+        }
+        expect((yield* f.log).find((entry) => entry.method === "launch")?.patch).not.toContainEqual(
+          { id: "acp", disabled: true },
+        );
+      }),
+  );
+  it.effect(
     "checks CLI health without launching profile hooks, MCP or a session on passive refresh",
     () =>
       Effect.gen(function* () {

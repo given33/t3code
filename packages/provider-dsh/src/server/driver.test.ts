@@ -232,6 +232,7 @@ it.layer(driverLayer)("DshDriver", (it) => {
         enabled: false,
         binaryPath: "dsh",
         profile: "acp",
+        bridgeEnabled: true,
         syncLocalModels: true,
         customProviderId: "",
         customProviderBaseUrl: "",
@@ -281,7 +282,7 @@ it.layer(driverLayer)("DshDriver", (it) => {
     "lists the requested cwd and page on the real instance home, without creating sessions",
     () =>
       Effect.gen(function* () {
-        const f = yield* create("listing");
+        const f = yield* create("listing", "t3-bridge");
         const first = yield* f.manage.listSessions({ cwd: f.directory });
         expect(first).toMatchObject({
           nextCursor: "next",

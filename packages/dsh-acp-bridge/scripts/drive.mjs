@@ -1,0 +1,200 @@
+import * as NodeAssert from "node:assert/strict";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import * as NodeReadline from "node:readline";
+import { withDshLaunch } from "../../provider-dsh/scripts/parity-launch.mjs";
+
+export async function withWorkspace(run) {
+  const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-dsh-e2e-"));
+  try {
+    return await run(root);
+  } finally {
+    await NodeFSP.rm(root, { recursive: true, force: true, maxRetries: 3 });
+  }
+}
+
+class RpcError extends Error {
+  constructor(method, error) {
+    // DSH may include request details in upstream errors. Keep only safe provider diagnostics.
+    const diagnostic = String(error.message)
+      .match(
+        /insufficient balance|insufficient_quota|missing API key|no API key|unauthorized|authentication failed|invalid API key|not logged in|invalid authentication|rate limit|connection error|fetch failed|\b(?:401|402|403|429|502|503)\b/gi,
+      )
+      ?.join(", ");
+    super(`${method} RPC ${error.code}${diagnostic ? ` (${diagnostic})` : ""}`);
+    this.providerUnavailable = !!diagnostic;
+  }
+}
+
+export async function drive({
+  bridgeEnabled,
+  cwd,
+  variables = [],
+  extraPatch,
+  syncLocalModels,
+  profile,
+  allowPermission,
+  run,
+}) {
+  const label = bridgeEnabled ? "T3" : "official";
+  return withDshLaunch(
+    { bridgeEnabled, variables, extraPatch, syncLocalModels, profile },
+    async ({ command, args, env, platform }) => {
+      const child = NodeChildProcess.spawn(command, args, {
+        cwd,
+        env,
+        windowsHide: true,
+        detached: platform !== "win32",
+      });
+      const closed = new Promise((done) => child.once("close", done));
+      const reader = NodeReadline.createInterface({ input: child.stdout });
+      child.stderr.resume();
+      const trace = [];
+      let pending,
+        failure,
+        nextId = 0;
+      const fail = (error) => {
+        failure ??= error;
+        pending?.reject(error);
+      };
+      child.once("error", fail);
+      child.once("exit", (code, signal) => fail(new Error(`DSH exited (${code ?? signal})`)));
+      child.stdin.on("error", fail);
+      reader.on("line", (line) => {
+        try {
+          const msg = JSON.parse(line);
+          NodeAssert.equal(msg.jsonrpc, "2.0");
+          if (msg.method) {
+            trace.push(msg);
+            if (msg.id !== undefined) {
+              NodeAssert.equal(msg.method, "session/request_permission");
+              const call = trace.findLast(
+                (m) =>
+                  m.params?.update?.sessionUpdate === "tool_call" &&
+                  m.params.update.toolCallId === msg.params.toolCall.toolCallId,
+              )?.params.update;
+              const allowed =
+                allowPermission?.(call) && msg.params.options.find((o) => o.kind === "allow_once");
+              const result = {
+                outcome: allowed
+                  ? { outcome: "selected", optionId: allowed.optionId }
+                  : { outcome: "cancelled" },
+              };
+              child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result }) + "\n");
+              trace.push({ reply: msg.method, result });
+            }
+          } else {
+            NodeAssert.ok(pending, "Unexpected JSON-RPC response");
+            NodeAssert.equal(msg.id, pending.id);
+            if (msg.error) {
+              const err = new RpcError(pending.method, msg.error);
+              trace.push({ method: pending.method, error: err.message });
+              pending.reject(err);
+            } else {
+              trace.push({ method: pending.method, result: msg.result });
+              pending.resolve(msg.result);
+            }
+          }
+        } catch (e) {
+          fail(e);
+        }
+      });
+      async function request(method, params) {
+        if (failure) throw failure;
+        const id = ++nextId;
+        const task = Promise.withResolvers();
+        pending = { ...task, id, method };
+        trace.push({ request: method, params });
+        const timer = setTimeout(
+          () => fail(new Error(`${method} timed out`)),
+          method === "session/prompt" ? 90000 : 20000,
+        );
+        try {
+          child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
+          return await task.promise;
+        } finally {
+          clearTimeout(timer);
+          pending = undefined;
+        }
+      }
+      try {
+        const init = await request("initialize", {
+          protocolVersion: 1,
+          clientCapabilities: {},
+          clientInfo: { name: "t3-parity", version: "1" },
+        });
+        NodeAssert.deepEqual(
+          init.agentInfo,
+          bridgeEnabled
+            ? { name: "t3-deepseek-harness-acp", version: "0.1.0-t3" }
+            : { name: "deepseek-harness-acp", version: "0.0.1" },
+        );
+        const { sessionId, configOptions } = await request("session/new", { cwd, mcpServers: [] });
+        const result = await run({ request, sessionId, configOptions, trace, label });
+        const listed = await request("session/list", { cwd });
+        NodeAssert.deepEqual(listed.sessions, []);
+        NodeAssert.deepEqual(await request("session/close", { sessionId }), {});
+        console.log(`${label} session/list=ok session/close=ok`);
+        const persisted = await request("session/list", { cwd });
+        NodeAssert.deepEqual(
+          persisted.sessions.map((s) => s.sessionId),
+          [sessionId],
+        );
+        const resumed = await request("session/resume", { cwd, mcpServers: [], sessionId });
+        NodeAssert.ok(resumed.configOptions.some((o) => o.id === "model"));
+        NodeAssert.deepEqual(await request("session/close", { sessionId }), {});
+        if (failure) throw failure;
+        return { trace, result };
+      } finally {
+        reader.close();
+        child.stdin.end();
+        const kill = setTimeout(() => {
+          if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null)
+            return;
+          if (platform === "win32") {
+            const killed = NodeChildProcess.spawnSync(
+              "taskkill.exe",
+              ["/PID", String(child.pid), "/T", "/F"],
+              { windowsHide: true, stdio: "ignore", timeout: 3000 },
+            );
+            if (killed.status !== 0) child.kill("SIGKILL");
+          } else {
+            try {
+              process.kill(-child.pid, "SIGKILL");
+            } catch (err) {
+              if (err.code !== "ESRCH") child.kill("SIGKILL");
+            }
+          }
+        }, 2000);
+        try {
+          await closed;
+        } finally {
+          clearTimeout(kill);
+        }
+      }
+    },
+  );
+}
+
+// Preserve ID equality/reuse and all tool payloads. Only generated identities, the
+// isolated workspace path and the declared implementation identity differ by design.
+export function normalize(trace, cwd) {
+  const ids = new Map();
+  function visit(v, key) {
+    if (Array.isArray(v)) return v.map((item) => visit(item));
+    if (v && typeof v === "object")
+      return Object.fromEntries(Object.entries(v).map(([k, val]) => [k, visit(val, k)]));
+    if (["messageId", "sessionId", "toolCallId"].includes(key)) {
+      const token = `${key}:${v}`;
+      if (!ids.has(token)) ids.set(token, `${key}#${ids.size}`);
+      return ids.get(token);
+    }
+    if (key === "cwd" && NodePath.resolve(v) === cwd) return "<workspace>";
+    return v;
+  }
+  const copy = visit(trace);
+  delete copy.find((m) => m.method === "initialize").result.agentInfo;
+  return copy;
+}

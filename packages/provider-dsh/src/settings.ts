@@ -44,6 +44,7 @@ export const DshSettings = makeProviderSettingsSchema(
         providerSettingsForm: { placeholder: "acp", clearWhenEmpty: "omit" },
       }),
     ),
+    bridgeEnabled: toggle("T3 ACP bridge", "Run the T3 ACP plugin inside DeepSeek Harness.", true),
     syncLocalModels: toggle(
       "Sync local DSH models",
       "Load custom LLM providers and models configured in local DeepSeek Harness profiles (desktop/web).",
@@ -94,6 +95,7 @@ export const DshSettings = makeProviderSettingsSchema(
     order: [
       "binaryPath",
       "profile",
+      "bridgeEnabled",
       "syncLocalModels",
       "customProviderId",
       "customProviderBaseUrl",

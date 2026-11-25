@@ -44,7 +44,7 @@ const harness = Effect.fn(function* () {
     yield* fs.writeFileString(file(profile), text);
   });
   const prepare = (input: Parameters<typeof decodeDshSettings>[0], env: NodeJS.ProcessEnv = {}) =>
-    prepareDshOverlay(decodeDshSettings(input), env).pipe(
+    prepareDshOverlay(decodeDshSettings({ bridgeEnabled: false, ...input }), env).pipe(
       Effect.provideService(HostProcess.HomeDirectory, home),
     );
   const overlay = Effect.fn(function* (
@@ -76,6 +76,36 @@ const provider = {
   models: [{ id: "new", name: "Named model" }],
 };
 it.layer(nodeLayer)("DSH profile overlays", (it) => {
+  it.effect(
+    "appends the native bridge to existing patches and preserves the profile ACP config",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* harness();
+        const bridge = f.path.join(f.home, "bridge plugin.mjs");
+        yield* f.fs.writeFileString(bridge, "");
+        yield* f.put(
+          "acp",
+          "- id: acp\n  config: {provider: sample, model: custom, sessionListPageSize: 7}",
+        );
+        const env = { T3_DSH_BRIDGE_PATH: bridge };
+        const settings = { bridgeEnabled: true, instructionsHome: f.home, syncLocalModels: false };
+        const rows = yield* f.overlay(settings, env);
+        expect(rows).toContainEqual({ id: "acp", disabled: true });
+        expect(rows).toContainEqual({
+          insert: [
+            {
+              id: "t3-acp-bridge",
+              name: (yield* f.path.toFileUrl(bridge)).href,
+              config: { provider: "sample", model: "custom", sessionListPageSize: 7 },
+            },
+          ],
+        });
+        expect(rows).toContainEqual(expect.objectContaining({ id: "agent-instructions" }));
+        expect(yield* f.overlay(settings, { T3_DSH_BRIDGE_PATH: bridge + ".missing" })).toEqual([
+          expect.objectContaining({ id: "agent-instructions" }),
+        ]);
+      }),
+  );
   it.effect("imports only model plugins, merging web, desktop and explicit profile overrides", () =>
     Effect.gen(function* () {
       const f = yield* harness();

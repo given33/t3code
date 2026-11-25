@@ -65,7 +65,13 @@ for await (const line of NodeReadline.createInterface({ input: process.stdin }))
         id,
         result: {
           protocolVersion: 1,
-          agentInfo: { name: "deepseek-harness-acp", version: "0.0.1" },
+          agentInfo: {
+            name:
+              process.env.DSH_TEST_CASE === "t3-bridge"
+                ? "t3-deepseek-harness-acp"
+                : "deepseek-harness-acp",
+            version: "0.0.1",
+          },
           agentCapabilities: {
             mcpCapabilities: { http: true },
             sessionCapabilities:

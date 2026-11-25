@@ -1,3 +1,4 @@
+import * as NodeURL from "node:url";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -10,7 +11,10 @@ import * as Semaphore from "effect/Semaphore";
 import { AcpRequestError } from "effect-acp/errors";
 import { type Document, isSeq, parseDocument, visit } from "yaml";
 import { DEFAULT_CUSTOM_KEY_ENV, type DshSettings } from "../settings.ts";
+import { bridgePatch } from "./bridgePatch.ts";
 import { encodeRoute, modelRoute } from "./catalog.ts";
+
+const { fileURLToPath, pathToFileURL } = NodeURL;
 
 // An env-name typo must not strip the OS paths/configuration a child needs to launch.
 const systemEnv =
@@ -354,15 +358,35 @@ export const readDshSkillRoots = Effect.fn("Dsh.readSkillRoots")(function* (
   ];
 });
 
+export const locateDshBridge = Effect.fn("Dsh.locateBridge")(function* (
+  settings: DshSettings,
+  env: NodeJS.ProcessEnv,
+) {
+  if (!settings.bridgeEnabled) return {};
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  const file =
+    env.T3_DSH_BRIDGE_PATH?.trim() ||
+    fileURLToPath(new URL("../../../dsh-acp-bridge/dist/index.js", import.meta.url));
+  const info = yield* fs.stat(file).pipe(Effect.orElseSucceed(() => undefined));
+  if (info?.type !== "File")
+    return {
+      warning: `T3 DSH bridge unavailable at ${file}. Using the official DeepSeek Harness ACP bridge.`,
+    };
+  return { url: pathToFileURL(path.resolve(file)).href };
+});
+
 const resolveProfile = Effect.fn("Dsh.resolveProfile")(function* (
   settings: DshSettings,
   environment: NodeJS.ProcessEnv,
+  bridgeUrl?: string,
 ) {
   const path = yield* Path.Path;
   const { home, root, profile, target } = yield* profileLocation(settings, environment);
   const instructionsHome = settings.instructionsHome || environment.DSH_AGENTS_HOME;
   const custom = yield* customProvider(settings);
-  if (!settings.syncLocalModels && !custom && !instructionsHome) return { overlay: [], models: [] };
+  if (!bridgeUrl && !settings.syncLocalModels && !custom && !instructionsHome)
+    return { overlay: [], models: [] };
   const write = settings.syncToLocalDsh && custom && profile.toLowerCase() !== "desktop";
   const load = Effect.gen(function* () {
     if (write) yield* assertWriteTarget(target);
@@ -413,15 +437,27 @@ const resolveProfile = Effect.fn("Dsh.resolveProfile")(function* (
     }
     const route = active.get(defaultModel) ?? inherited.get(defaultModel);
     const { provider, model } = fields(route?.config);
-    if (
+    const configuredAcp = current.rows.findLast(
+      (r) => record(r) && r.id === "acp" && Object.hasOwn(r, "config"),
+    );
+    const hasRoute =
       !route?.disabled &&
       typeof provider === "string" &&
       provider.trim() &&
       typeof model === "string" &&
-      model.trim() &&
-      !current.rows.some((r) => record(r) && r.id === "acp")
-    ) {
-      // ACP uses its own default; patch only config so Cordis retains the startup injection.
+      model.trim();
+    if (bridgeUrl) {
+      overlay.push(
+        ...bridgePatch(
+          bridgeUrl,
+          configuredAcp
+            ? fields(fields(configuredAcp).config)
+            : hasRoute
+              ? { provider, model }
+              : undefined,
+        ),
+      );
+    } else if (hasRoute && !current.rows.some((r) => record(r) && r.id === "acp")) {
       overlay.push({ id: "acp", config: { provider, model } });
     }
     if (instructionsHome) {
@@ -478,7 +514,8 @@ export const prepareDshOverlay = Effect.fn("Dsh.prepareOverlay")(function* (
   settings: DshSettings,
   environment: NodeJS.ProcessEnv,
 ) {
-  const { overlay } = yield* resolveProfile(settings, environment);
+  const bridge = yield* locateDshBridge(settings, environment);
+  const { overlay } = yield* resolveProfile(settings, environment, bridge.url);
   if (!overlay.length) return undefined;
   const contents = yield* encodeOverlay(overlay).pipe(
     Effect.mapError(() => invalid("Cannot encode the DSH model overlay.")),

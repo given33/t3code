@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import * as Effect from "effect/Effect";
-import { resolveDshBinary, dshEnvironment } from "./acpSupport.ts";
+import { resolveDshBinary, dshEnvironment, dshInvocation } from "./acpSupport.ts";
 
 const home = "/home/test";
 const desktop =
@@ -108,4 +108,15 @@ describe("DeepSeek CLI resolution", () => {
       expect(yield* resolve("linux", "", {})).toBe("dsh");
     }),
   );
+});
+
+it("launches the installed Windows ACP executable directly with separate arguments", () => {
+  const launch = dshInvocation(desktop, { test: "preserved" });
+  expect(launch.command).toMatch(/DeepSeek Harness\/DeepSeek Harness\.exe$/u);
+  expect(launch.args).toEqual([
+    "--expose-internals",
+    expect.stringContaining("app.asar/dsh/node_modules/@deepseek-ai/dsh-desktop-host/lib/cli.js"),
+  ]);
+  expect(launch.env).toEqual({ test: "preserved", ELECTRON_RUN_AS_NODE: "1" });
+  expect(dshInvocation("custom.cmd", {})).toEqual({ command: "custom.cmd", args: [], env: {} });
 });

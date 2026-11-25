@@ -27,7 +27,7 @@ import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import type * as Acp from "effect-acp/compat";
 import { DshSettings, decodeDshSettings } from "../settings.ts";
-import { dshEnvironment, makeDshAcpRuntime } from "./acpSupport.ts";
+import { isDshAgent, dshEnvironment, makeDshAcpRuntime } from "./acpSupport.ts";
 import { makeDshAdapterV2Driver, type DshAdapterV2DriverEnv } from "./adapter.ts";
 import { discoverDshSkills } from "./skills.ts";
 import { dshCatalog, modelOption } from "./catalog.ts";
@@ -74,7 +74,7 @@ const listSessions = Effect.fn("Dsh.listSessions")(
     });
     const initialized = yield* runtime.initialize();
     const caps = initialized.agentCapabilities?.sessionCapabilities;
-    if (initialized.agentInfo?.name !== "deepseek-harness-acp" || caps?.list == null)
+    if (!isDshAgent(initialized.agentInfo?.name) || caps?.list == null)
       return yield* unsupportedOperation(
         "session_list_unsupported",
         "The agent does not advertise DeepSeek Harness session listing.",
@@ -232,7 +232,7 @@ export const DshDriver: ProviderDriver<DshSettings, DshDriverEnv> = {
               ),
             )
           : [];
-        return { ...machine, skills, slashCommandsPending: false };
+        return { ...machine, skills };
       }),
       refreshModels: () => Effect.asVoid(refresh),
       orchestrationAdapter: adapter,
