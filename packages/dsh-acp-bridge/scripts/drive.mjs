@@ -42,12 +42,12 @@ export async function drive({
       const reader = NodeReadline.createInterface({ input: child.stdout });
       child.stderr.resume();
       const trace = [];
-      let pending,
-        failure,
+      const requests = new Map();
+      let failure,
         nextId = 0;
       const fail = (error) => {
         failure ??= error;
-        pending?.reject(error);
+        for (const pending of requests.values()) pending.reject(error);
       };
       child.once("error", fail);
       child.once("exit", (code, signal) => fail(new Error(`DSH exited (${code ?? signal})`)));
@@ -76,6 +76,7 @@ export async function drive({
               trace.push({ reply: msg.method, result });
             }
           } else {
+            const pending = requests.get(msg.id);
             NodeAssert.ok(pending, "Unexpected JSON-RPC response");
             NodeAssert.equal(msg.id, pending.id);
             onResponse?.(pending.method, msg);
@@ -99,7 +100,7 @@ export async function drive({
         if (failure) throw failure;
         const id = ++nextId;
         const task = Promise.withResolvers();
-        pending = { ...task, id, method };
+        requests.set(id, { ...task, id, method });
         trace.push({ request: method, params });
         const timer = setTimeout(
           () => fail(new Error(`${method} timed out`)),
@@ -110,7 +111,7 @@ export async function drive({
           return await task.promise;
         } finally {
           clearTimeout(timer);
-          pending = undefined;
+          requests.delete(id);
         }
       }
       try {
@@ -256,7 +257,15 @@ export function normalize(
     });
   }
   const copy = visit(trace);
-  delete copy.find((m) => m.method === "initialize").result.agentInfo;
+  const init = copy.find((m) => m.method === "initialize").result;
+  if (init.agentInfo?.name === "t3-deepseek-harness-acp") {
+    NodeAssert.deepEqual(init._meta, {
+      "t3.dsh.promptSteering": true,
+      "t3.dsh.toolFreeSession": true,
+    });
+    delete init._meta;
+  }
+  delete init.agentInfo;
   if (t3Modes) {
     // These parity prompts never change permissions. Remove only the two checked
     // setup response fields. Every notification still participates in comparison.

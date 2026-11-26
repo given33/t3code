@@ -73,6 +73,23 @@ it.layer(nodeLayer)("DeepSeek Harness status", (it) => {
         );
       }),
   );
+  it.effect.each([
+    ["t3-bridge", true],
+    ["t3-bridge-tool-free-error", false],
+    ["ok", false],
+  ] as const)(
+    "reports tool-free text generation from the actual isolated session probe: %s",
+    ([scenario, expected]) =>
+      Effect.gen(function* () {
+        const f = yield* fixture(scenario);
+        const snapshot = yield* checkDshProviderStatus(
+          { ...f.settings, bridgeEnabled: true },
+          f.environment,
+        );
+        expect(snapshot.supportsTextGeneration).toBe(expected);
+        expect((yield* f.log).filter((e) => e.method === "session/prompt")).toHaveLength(0);
+      }),
+  );
   it.effect("does not spawn while disabled and distinguishes missing from broken version", () =>
     Effect.gen(function* () {
       const f = yield* fixture("bad-version");

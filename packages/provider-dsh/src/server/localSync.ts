@@ -388,6 +388,7 @@ const resolveProfile = Effect.fn("Dsh.resolveProfile")(function* (
   settings: DshSettings,
   environment: NodeJS.ProcessEnv,
   bridgeUrl?: string,
+  isolated = false,
 ) {
   const path = yield* Path.Path;
   const { home, root, profile, target } = yield* profileLocation(settings, environment);
@@ -395,7 +396,8 @@ const resolveProfile = Effect.fn("Dsh.resolveProfile")(function* (
   const custom = yield* customProvider(settings);
   if (!bridgeUrl && !settings.syncLocalModels && !custom && !instructionsHome)
     return { overlay: [], models: [] };
-  const write = settings.syncToLocalDsh && custom && profile.toLowerCase() !== "desktop";
+  const write =
+    !isolated && settings.syncToLocalDsh && custom && profile.toLowerCase() !== "desktop";
   const load = Effect.gen(function* () {
     if (write) yield* assertWriteTarget(target);
     const current = yield* readPatch(target);
@@ -435,9 +437,25 @@ const resolveProfile = Effect.fn("Dsh.resolveProfile")(function* (
       if (custom) providers[custom.id] = yield* mergeProvider(providers[custom.id], custom);
       inherited.set(pi, { ...source, ...selected, id: pi, config: { ...config, providers } });
     }
+    // A disposable home runs the bundled ACP profile. Carry model configuration only,
+    // never the original profile's hooks, persistence, tool plugins or instructions.
     const overlay = [...inherited.values()].map(normalizeDeepSeekModels);
+    if (isolated) {
+      for (const [id, row] of active) {
+        if (!inherited.has(id)) overlay.push(normalizeDeepSeekModels(row));
+      }
+      // Some profiles replace pi-ai with named instances for separate model routes.
+      for (const patch of current.rows) {
+        if (!record(patch) || !Array.isArray(patch.insert)) continue;
+        const adapters = patch.insert.filter(
+          (row): row is Row => record(row) && row.name === "@deepseek-ai/dsh-llm-pi-ai",
+        );
+        if (adapters.length)
+          overlay.push({ insert: adapters.map(({ id, name, config }) => ({ id, name, config })) });
+      }
+    }
     // Current profile rows already apply natively. Override only those that need migration.
-    if (settings.syncLocalModels) {
+    if (!isolated && settings.syncLocalModels) {
       for (const row of active.values()) {
         const normalized = normalizeDeepSeekModels(row);
         if (normalized !== row) overlay.push(normalized);
@@ -468,7 +486,7 @@ const resolveProfile = Effect.fn("Dsh.resolveProfile")(function* (
     } else if (hasRoute && !current.rows.some((r) => record(r) && r.id === "acp")) {
       overlay.push({ id: "acp", config: { provider, model } });
     }
-    if (instructionsHome) {
+    if (!isolated && instructionsHome) {
       const dir = path.resolve(expandHomePath(instructionsHome, home));
       const row = current.rows.findLast(
         (r) => record(r) && r.id === "agent-instructions" && Object.hasOwn(r, "config"),
@@ -483,7 +501,7 @@ const resolveProfile = Effect.fn("Dsh.resolveProfile")(function* (
         },
       });
     }
-    if (environment.DSH_AGENTS_HOME) {
+    if (!isolated && environment.DSH_AGENTS_HOME) {
       const { patch } = yield* skillFilesystem(current.rows, environment, home, path.dirname(root));
       if (patch) overlay.push(patch);
     }
@@ -521,9 +539,12 @@ export const configuredDshModels = (settings: DshSettings, environment: NodeJS.P
 export const prepareDshOverlay = Effect.fn("Dsh.prepareOverlay")(function* (
   settings: DshSettings,
   environment: NodeJS.ProcessEnv,
+  isolated = false,
 ) {
   const bridge = yield* locateDshBridge(settings, environment);
-  const { overlay } = yield* resolveProfile(settings, environment, bridge.url);
+  if (isolated && !bridge.url)
+    return yield* invalid("Tool-free text generation requires the T3 DSH bridge.");
+  const { overlay } = yield* resolveProfile(settings, environment, bridge.url, isolated);
   if (!overlay.length) return undefined;
   const contents = yield* encodeOverlay(overlay).pipe(
     Effect.mapError(() => invalid("Cannot encode the DSH model overlay.")),

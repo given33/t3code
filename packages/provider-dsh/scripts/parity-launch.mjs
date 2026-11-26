@@ -1,4 +1,5 @@
 import * as NodePath from "node:path";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -40,5 +41,25 @@ export function withDshLaunch(
         });
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
+  );
+}
+
+// Drive the production helper and scope using the same instance environment as the bridge tests.
+export async function generateTitle(settings, variables, input) {
+  const { checkDshProviderStatus } = await import("../src/server/status.ts");
+  const { makeDshTextGeneration } = await import("../src/server/textGeneration.ts");
+  return Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const environment = yield* dshEnvironment(variables);
+        const config = decodeDshSettings(settings);
+        const snapshot = yield* checkDshProviderStatus(config, environment);
+        if (!snapshot.supportsTextGeneration)
+          throw new Error("Isolated DSH probe did not advertise text generation");
+        console.log("supportsTextGeneration=true (isolated probe)");
+        const generation = yield* makeDshTextGeneration(config, environment);
+        return yield* generation.generateThreadTitle(input);
+      }),
+    ).pipe(Effect.provide(NodeCrypto.layer), Effect.provide(NodeServices.layer)),
   );
 }

@@ -61,21 +61,24 @@ export const prepareDshLaunch = Effect.fn("Dsh.prepareLaunch")(function* (
   settings: DshSettings,
   environment: NodeJS.ProcessEnv,
   probePatchPath?: string,
+  isolatedHome?: string,
 ) {
   const launch = dshInvocation(
     yield* resolveDshBinary(settings.binaryPath, environment),
     environment,
   );
-  const overlay = yield* prepareDshOverlay(settings, environment);
+  const overlay = yield* prepareDshOverlay(settings, environment, isolatedHome !== undefined);
   return {
     command: launch.command,
     args: [
       ...launch.args,
       "--profile",
-      settings.profile.trim() || "acp",
+      isolatedHome ? "acp" : settings.profile.trim() || "acp",
       ...(overlay ? ["--patch", overlay] : []),
       ...(probePatchPath ? ["--patch", probePatchPath] : []),
     ],
-    env: launch.env,
+    env: isolatedHome
+      ? { ...launch.env, DSH_HOME: isolatedHome, DSH_TELEMETRY_DISABLED: "1" }
+      : launch.env,
   };
 });

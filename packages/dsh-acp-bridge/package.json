@@ -14,6 +14,9 @@
     "test:tools": "node scripts/tools.mjs",
     "test:modes": "node scripts/modes.mjs",
     "test:commands": "node scripts/commands.mjs",
+    "test:steer": "node scripts/steer.mjs",
+    "test:text-generation": "node scripts/text-generation.mjs",
+    "audit:server-mcp": "node scripts/audit-server-mcp.mjs",
     "test:parity": "node scripts/parity.mjs",
     "test:e2e": "node scripts/e2e-offline.mjs",
     "typecheck": "effect-tsgo tsrs --noEmit"

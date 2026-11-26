@@ -32,6 +32,7 @@ interface AcpSessionBuildOptions {
   cwd: string;
   mcpServers: readonly McpServer[];
   agentOptions: AgentOptions;
+  toolFree?: boolean;
   signal: AbortSignal;
   notify: (notification: SessionNotification) => Promise<void>;
 }
@@ -75,6 +76,13 @@ function internalError(detail: string): Error {
 
 async function composeAgent(ctx: Context, options: AcpSessionBuildOptions) {
   dshRuntime().agent.installModelSelection(ctx);
+  if (options.toolFree) {
+    const tools = ctx.get("tools");
+    if (options.mcpServers.length || !tools?.restrict)
+      throw invalidParams("tool-free ACP session unavailable");
+    tools.restrict({ allow: [] });
+    return;
+  }
   await mountAcpMcpServers(ctx, options.mcpServers, options.cwd);
 }
 
@@ -87,6 +95,7 @@ export class AcpSession {
   private lastModeId: string | undefined;
   private outputTail = Promise.resolve();
   private advertisedSkills = new Set<string>();
+  private warnedMissingSteer = false;
   private inflight: InflightPrompt | undefined;
   private closing: Promise<void> | undefined;
 
@@ -122,6 +131,10 @@ export class AcpSession {
       signal: options.signal,
       setup: (agentCtx) => composeAgent(agentCtx, options),
     });
+    if (options.toolFree && ctx.get("tools")?.schemas?.(handle.agent).length !== 0) {
+      await handle.dispose();
+      throw invalidParams("tool-free ACP session still exposes tools");
+    }
     return new AcpSession(ctx, handle, options.cwd, options.notify);
   }
 
@@ -333,8 +346,48 @@ export class AcpSession {
     requestSignal?: AbortSignal,
   ): Promise<PromptResponse> {
     this.assertActive();
-    if (this.inflight !== undefined)
-      throw invalidParams("a prompt is already in flight for this session");
+    if (this.inflight !== undefined) {
+      const active = this.inflight;
+      const text = params.prompt.map((part) => (part.type === "text" ? part.text : "")).join("");
+      if (
+        !params.prompt.every((part) => part.type === "text") ||
+        !text.trim() ||
+        params.prompt.some((part) => part.type === "text" && part.text.startsWith("/")) ||
+        !active.messageQueued ||
+        active.admissionController.signal.aborted ||
+        requestSignal?.aborted
+      ) {
+        throw invalidParams("a prompt is already in flight for this session");
+      }
+      if (typeof this.agent.steer !== "function") {
+        if (!this.warnedMissingSteer) {
+          this.warnedMissingSteer = true;
+          this.ctx.logger.warn("acp: agent.steer unavailable, rejecting concurrent prompt");
+        }
+        throw invalidParams("a prompt is already in flight for this session");
+      }
+      this.agent.steer(
+        dshRuntime().llm.createUserMessage({
+          content: [{ type: "text", text }],
+          source: { kind: "user" },
+        }),
+      );
+      // The newest wire request owns completion. The same turn, output queue and
+      // quiescence watcher continue through tool execution and any more steers.
+      const next = Promise.withResolvers<StopReason>();
+      active.resolve("end_turn");
+      active.resolve = next.resolve;
+      active.reject = next.reject;
+      const abort = () => {
+        if (active.resolve === next.resolve) this.cancelPrompt("ACP steer request cancelled");
+      };
+      requestSignal?.addEventListener("abort", abort, { once: true });
+      try {
+        return { stopReason: await next.promise };
+      } finally {
+        requestSignal?.removeEventListener("abort", abort);
+      }
+    }
     const completion = Promise.withResolvers<StopReason>();
     const admission = Promise.withResolvers<void>();
     const admissionController = new AbortController();
@@ -356,7 +409,8 @@ export class AcpSession {
     };
     this.inflight = inflight;
     const onRequestAbort = (): void => {
-      this.cancelPrompt("ACP prompt request cancelled");
+      if (inflight.resolve === completion.resolve)
+        this.cancelPrompt("ACP prompt request cancelled");
     };
     requestSignal?.addEventListener("abort", onRequestAbort, { once: true });
     if (requestSignal?.aborted === true) onRequestAbort();

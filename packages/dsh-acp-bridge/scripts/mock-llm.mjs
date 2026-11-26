@@ -66,6 +66,10 @@ export async function startMock({
   onModelInput,
   toolCalls,
   onTextStart,
+  onToolStart,
+  onModelFrame,
+  expectToolFree = false,
+  textChunks = ["Offline stream ", "verified."],
   maxTextRequests = 3,
 } = {}) {
   const seen = new Map([
@@ -98,10 +102,12 @@ export async function startMock({
           );
       }
       const expectedName = call?.name ?? "pwsh";
-      NodeAssert.ok(
-        body.tools.some((t) => t.name === expectedName),
-        `Missing ${expectedName} (offered: ${body.tools.map((t) => t.name).join(", ")})`,
-      );
+      if (expectToolFree) NodeAssert.deepEqual(body.tools ?? [], []);
+      else
+        NodeAssert.ok(
+          body.tools.some((t) => t.name === expectedName),
+          `Missing ${expectedName} (offered: ${body.tools.map((t) => t.name).join(", ")})`,
+        );
       const replyWithText = !call;
       requests.push(replyWithText ? "text" : "tool");
       NodeAssert.ok(
@@ -110,10 +116,11 @@ export async function startMock({
       );
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
       let sequence = 0;
-      const send = (type, fields) =>
-        res.write(
-          `event: ${type}\ndata: ${JSON.stringify({ type, sequence_number: sequence++, ...fields })}\n\n`,
-        );
+      const send = (type, fields) => {
+        const frame = { type, sequence_number: sequence++, ...fields };
+        onModelFrame?.(frame);
+        return res.write(`event: ${type}\ndata: ${JSON.stringify(frame)}\n\n`);
+      };
       const response = {
         id: "resp_offline",
         model: modelId,
@@ -143,17 +150,18 @@ export async function startMock({
           await onTextStart({ step, res });
           if (res.destroyed) return;
         }
-        for (const delta of ["Offline stream ", "verified."]) {
+        for (const delta of textChunks) {
           send("response.output_text.delta", { ...fields, content_index: 0, delta });
           await NodeTimersPromises.setImmediate();
         }
-        content.text = answer;
+        content.text = textChunks.join("");
         item.content.push(content);
-        send("response.output_text.done", { ...fields, content_index: 0, text: answer });
+        send("response.output_text.done", { ...fields, content_index: 0, text: content.text });
         send("response.content_part.done", { ...fields, content_index: 0, part: content });
       } else {
         item.arguments = JSON.stringify(call.args);
         send("response.function_call_arguments.delta", { ...fields, delta: item.arguments });
+        await onToolStart?.();
         send("response.function_call_arguments.done", { ...fields, arguments: item.arguments });
       }
       item.status = "completed";

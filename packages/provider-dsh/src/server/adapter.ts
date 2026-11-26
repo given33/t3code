@@ -150,6 +150,9 @@ export function dshFlavor(options: DshAdapterV2Options): AcpAdapterV2Flavor {
             : e,
         ),
       ),
+    steersWithPrompt: (initialized) =>
+      initialized.agentInfo?.name === "t3-deepseek-harness-acp" &&
+      initialized._meta?.["t3.dsh.promptSteering"] === true,
     compactViaAdvertisedCommand: true,
     mcpOverHttp: true,
     promptFailure: dshPromptFailure,

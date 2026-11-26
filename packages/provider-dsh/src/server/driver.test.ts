@@ -2,47 +2,28 @@ import { expect, it } from "@effect/vitest";
 import {
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
-  MessageId,
-  NodeId,
-  ProjectId,
-  RunAttemptId,
-  RunId,
   ProviderSessionId,
   ThreadId,
   ProviderInstanceId,
 } from "@t3tools/contracts";
-import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
-import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Stream from "effect/Stream";
-import {
-  ProviderAdapterV2RuntimePolicy,
-  type ProviderAdapterV2TurnInput,
-} from "@t3tools/provider-core/server/ProviderAdapter";
-import * as Layer from "effect/Layer";
+import { ProviderAdapterV2RuntimePolicy } from "@t3tools/provider-core/server/ProviderAdapter";
 import { DshDriver } from "./driver.ts";
-import { fixture, nodeLayer } from "./testing/fixture.ts";
+import { fixture } from "./testing/fixture.ts";
 
-const driverLayer = TestProviderHost.layer({ runBackgroundWork: false }).pipe(
-  Layer.provideMerge(nodeLayer),
-  Layer.provideMerge(IdAllocator.layer),
-  Layer.provideMerge(McpProviderSessions.layer),
-  Layer.provideMerge(
-    Layer.succeed(
-      ProviderEventLoggers.ProviderEventLoggers,
-      ProviderEventLoggers.NoOpProviderEventLoggers,
-    ),
-  ),
-);
+import { driverLayer, turnInput } from "./testing/turn.ts";
+
 const create = Effect.fn(function* (
   name: string,
   scenario = "ok",
@@ -61,64 +42,57 @@ const create = Effect.fn(function* (
   return { ...f, instance, manage };
 });
 
-const turnInput = Effect.fn(function* (
-  {
-    threadId,
-    modelSelection,
-    runtimePolicy,
-    providerThread,
-  }: Pick<
-    ProviderAdapterV2TurnInput,
-    "threadId" | "modelSelection" | "runtimePolicy" | "providerThread"
-  >,
-  ordinal: number,
-  text: string,
-) {
-  const now = yield* DateTime.now;
-  return {
-    threadId,
-    modelSelection,
-    runtimePolicy,
-    providerThread,
-    runOrdinal: ordinal,
-    providerTurnOrdinal: ordinal,
-    rootNodeId: NodeId.make(`root-${ordinal}`),
-    runId: RunId.make(`run-${ordinal}`),
-    attemptId: RunAttemptId.make(`attempt-${ordinal}`),
-    message: {
-      text,
-      attachments: [],
-      createdBy: "user",
-      creationSource: "web",
-      messageId: MessageId.make(`message-${ordinal}`),
-    },
-    appThread: {
-      id: threadId,
-      projectId: ProjectId.make("project"),
-      title: "DSH test thread",
-      createdBy: "user",
-      creationSource: "web",
-      providerInstanceId: modelSelection.instanceId,
-      modelSelection,
-      runtimeMode: runtimePolicy.runtimeMode,
-      interactionMode: runtimePolicy.interactionMode,
-      branch: null,
-      worktreePath: null,
-      activeProviderThreadId: providerThread.id,
-      lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
-      forkedFrom: null,
-      createdAt: now,
-      updatedAt: now,
-      archivedAt: null,
-      settledOverride: null,
-      settledAt: null,
-      lastVisitedAt: null,
-      deletedAt: null,
-    },
-  } satisfies ProviderAdapterV2TurnInput;
-});
-
 it.layer(driverLayer)("DshDriver", (it) => {
+  it.effect("bounds an unresponsive title process with an explicit timeout error", () =>
+    Effect.gen(function* () {
+      const launching = yield* Deferred.make<void>();
+      const blocked = ChildProcessSpawner.make(() =>
+        Deferred.succeed(launching, undefined).pipe(Effect.andThen(Effect.never)),
+      );
+      const f = yield* create("title-timeout", "t3-bridge", { bridgeEnabled: true }).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, blocked),
+      );
+      const result = yield* f.instance.textGeneration
+        .generateThreadTitle({
+          cwd: f.directory,
+          message: "title test",
+          modelSelection: { instanceId: f.instance.instanceId, model: "default" },
+        })
+        .pipe(Effect.flip, Effect.forkChild);
+      yield* Deferred.await(launching);
+      yield* TestClock.adjust("91 seconds");
+      expect(yield* Fiber.join(result)).toMatchObject({
+        operation: "generateThreadTitle",
+        detail: expect.stringContaining("timed out"),
+      });
+    }),
+  );
+  it.effect.each([
+    ["t3-bridge", "empty text"],
+    ["t3-bridge-blank-title", "empty title"],
+  ] as const)(
+    "rejects an empty title response and closes the isolated session: %s",
+    ([scenario, detail]) =>
+      Effect.gen(function* () {
+        const f = yield* create("title-error", scenario, { bridgeEnabled: true });
+        const error = yield* Effect.flip(
+          f.instance.textGeneration.generateThreadTitle({
+            cwd: f.directory,
+            message: "title test",
+            modelSelection: { instanceId: f.instance.instanceId, model: "default" },
+          }),
+        );
+        expect(error).toMatchObject({
+          operation: "generateThreadTitle",
+          detail: expect.stringContaining(detail),
+        });
+        const log = yield* f.log;
+        expect(log.filter((e) => e.method === "session/close")).toHaveLength(1);
+        const { cwd, mcpTypes } = log.find((e) => e.method === "session/new")!;
+        expect(mcpTypes).toEqual([]);
+        expect(cwd).not.toBe(f.directory);
+      }),
+  );
   it.effect(
     "sends orchestration instructions on the first turn and again only after completed compaction",
     () =>

@@ -467,3 +467,24 @@ it("discards queued assistant and tool updates when the owning prompt is cancell
   await session.drainUpdates();
   expect(notify).not.toHaveBeenCalled();
 });
+
+it("rejects concurrent plain text with invalidParams and warns once when agent.steer is missing", async () => {
+  const { session, agent, warn } = await setup();
+  const waiting = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  agent.whenIdle = () => {
+    waiting.resolve();
+    return release.promise;
+  };
+  const text = { sessionId: "test", prompt: [{ type: "text" as const, text: "message" }] };
+  const first = session.prompt(text, false);
+  await waiting.promise;
+  for (let i = 0; i < 2; i++)
+    await expect(session.prompt(text, false)).rejects.toMatchObject({ code: -32602 });
+  expect(warn.mock.calls.filter(([msg]) => msg.includes("agent.steer unavailable"))).toHaveLength(
+    1,
+  );
+  expect(agent.followup).toHaveBeenCalledTimes(1);
+  release.resolve();
+  await expect(first).resolves.toEqual({ stopReason: "end_turn" });
+});

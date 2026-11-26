@@ -80,12 +80,14 @@ for await (const line of NodeReadline.createInterface({ input: process.stdin }))
         result: {
           protocolVersion: 1,
           agentInfo: {
-            name:
-              process.env.DSH_TEST_CASE === "t3-bridge"
-                ? "t3-deepseek-harness-acp"
-                : "deepseek-harness-acp",
+            name: process.env.DSH_TEST_CASE.startsWith("t3-bridge")
+              ? "t3-deepseek-harness-acp"
+              : "deepseek-harness-acp",
             version: "0.0.1",
           },
+          ...(process.env.DSH_TEST_CASE.startsWith("t3-bridge") && {
+            _meta: { "t3.dsh.promptSteering": true, "t3.dsh.toolFreeSession": true },
+          }),
           agentCapabilities: {
             mcpCapabilities: { http: true },
             sessionCapabilities:
@@ -96,7 +98,11 @@ for await (const line of NodeReadline.createInterface({ input: process.stdin }))
       });
       break;
     case "session/new":
-      if (process.env.DSH_TEST_CASE === "probe-error")
+      if (
+        process.env.DSH_TEST_CASE === "probe-error" ||
+        (process.env.DSH_TEST_CASE === "t3-bridge-tool-free-error" &&
+          params._meta?.["t3.dsh.toolFreeSession"])
+      )
         send({ id, error: { code: -32000, message: "Profile unavailable" } });
       else {
         if (process.env.DSH_TEST_CASE.startsWith("commands")) {
@@ -170,6 +176,18 @@ for await (const line of NodeReadline.createInterface({ input: process.stdin }))
       send({ id, result: {} });
       break;
     case "session/prompt":
+      if (process.env.DSH_TEST_CASE === "t3-bridge-blank-title") {
+        send({
+          method: "session/update",
+          params: {
+            sessionId: params.sessionId,
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: JSON.stringify({ title: '""' }) },
+            },
+          },
+        });
+      }
       if (process.env.DSH_TEST_CASE === "instruction-delivery" && ++promptCount === 2) {
         send({
           method: "session/update",

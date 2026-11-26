@@ -94,6 +94,7 @@ export interface Agent {
   status: string;
   id: string;
   session: Session;
+  steer?(message: UserMessage): void;
   followup(message: UserMessage): void;
   cancel(reason: { kind: "user" }): void;
   whenIdle(): Promise<void>;
@@ -152,7 +153,11 @@ interface Services {
     optionOf(name: string): { name: string; description?: string };
     set(session: Session, name: string): void;
   };
-  tools: { get(name: string, scope: Agent): ToolDefinition | undefined };
+  tools: {
+    get(name: string, scope: Agent): ToolDefinition | undefined;
+    restrict?(filter: { allow: string[] }): unknown;
+    schemas?(scope: Agent): unknown[];
+  };
   commands: {
     list(agent: Agent): readonly AvailableCommand[];
     execute(
@@ -298,6 +303,7 @@ export interface SessionNotification {
 }
 export type InitializeRequest = unknown;
 export interface InitializeResponse {
+  _meta?: Record<string, unknown>;
   protocolVersion: number;
   agentInfo: { name: string; version: string };
   agentCapabilities: {
@@ -313,6 +319,7 @@ interface Workspace {
   additionalDirectories?: string[] | null;
 }
 export interface NewSessionRequest extends Workspace {
+  _meta?: Record<string, unknown>;
   mcpServers: McpServer[];
 }
 export interface NewSessionResponse extends ResumeSessionResponse {

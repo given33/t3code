@@ -189,6 +189,12 @@ export function apply(ctx: Context, config: AcpConfig): void {
       imagePromptEnabled = await supportsAcpImagePrompts(ctx, config.provider, config.model);
       return {
         protocolVersion: PROTOCOL_VERSION,
+        _meta: {
+          "t3.dsh.promptSteering": true,
+          "t3.dsh.toolFreeSession":
+            typeof ctx.get("tools")?.restrict === "function" &&
+            typeof ctx.get("tools")?.schemas === "function",
+        },
         agentInfo: { name: "t3-deepseek-harness-acp", version: "0.1.0-t3" },
         agentCapabilities: {
           mcpCapabilities: { http: true },
@@ -217,6 +223,7 @@ export function apply(ctx: Context, config: AcpConfig): void {
           sessionId,
           cwd: params.cwd,
           mcpServers: params.mcpServers,
+          toolFree: params._meta?.["t3.dsh.toolFreeSession"] === true,
           agentOptions: agentOptions(config),
           signal,
           notify,

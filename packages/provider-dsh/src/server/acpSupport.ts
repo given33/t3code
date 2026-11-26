@@ -14,6 +14,9 @@ import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import { AcpRequestError } from "effect-acp/errors";
 import * as Layer from "effect/Layer";
 import type * as Acp from "effect-acp/compat";
 import { prepareDshLaunch } from "./launch.ts";
@@ -23,6 +26,11 @@ import { DEFAULT_CUSTOM_KEY_ENV, type DshSettings } from "../settings.ts";
 
 export const isDshAgent = (name: string | undefined) =>
   name === "deepseek-harness-acp" || name === "t3-deepseek-harness-acp";
+
+export const supportsDshToolFreeSession = (init: Acp.InitializeResponse) =>
+  init.agentInfo?.name === "t3-deepseek-harness-acp" &&
+  init._meta?.["t3.dsh.toolFreeSession"] === true &&
+  init.agentCapabilities?.sessionCapabilities?.close != null;
 
 export const DSH_SUPPORTED_RUNTIME_MODES = [
   "approval-required",
@@ -115,15 +123,17 @@ export interface DshAcpRuntimeInput extends Omit<
   readonly settings: DshSettings;
   readonly environment: NodeJS.ProcessEnv;
   readonly probePatchPath?: string;
+  readonly isolatedHome?: string;
 }
 
 export const makeDshAcpRuntime = Effect.fn("Dsh.makeAcpRuntime")(function* ({
   settings,
   environment,
   probePatchPath,
+  isolatedHome,
   ...options
 }: DshAcpRuntimeInput) {
-  const launch = yield* prepareDshLaunch(settings, environment, probePatchPath);
+  const launch = yield* prepareDshLaunch(settings, environment, probePatchPath, isolatedHome);
   const context = yield* Layer.build(
     AcpSessionRuntime.layer({
       ...options,
@@ -136,4 +146,28 @@ export const makeDshAcpRuntime = Effect.fn("Dsh.makeAcpRuntime")(function* ({
     }),
   );
   return yield* Effect.service(AcpSessionRuntime.AcpSessionRuntime).pipe(Effect.provide(context));
+});
+
+export const startDshToolFreeSession = Effect.fn("Dsh.startToolFreeSession")(function* (
+  settings: DshSettings,
+  environment: NodeJS.ProcessEnv,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-dsh-text-" });
+  const runtime = yield* makeDshAcpRuntime({
+    settings,
+    environment,
+    isolatedHome: path.join(directory, "home"),
+    cwd: directory,
+    mcpServers: [],
+    clientInfo: { name: "t3-dsh-text", version: "1" },
+    authenticateOnAuthRequired: false,
+    sessionMeta: () => ({ "t3.dsh.toolFreeSession": true }),
+  });
+  if (!supportsDshToolFreeSession(yield* runtime.initialize()))
+    return yield* AcpRequestError.invalidRequest(
+      "The DSH bridge does not advertise tool-free sessions.",
+    );
+  return { runtime, started: yield* runtime.start() };
 });

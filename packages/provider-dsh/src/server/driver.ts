@@ -2,7 +2,6 @@ import {
   AcpRegistryListSessionsResult,
   AcpRegistryOperationError,
   type AcpRegistryOperationErrorReason,
-  TextGenerationError,
 } from "@t3tools/contracts";
 import {
   defaultProviderContinuationIdentity,
@@ -17,7 +16,7 @@ import {
   haveProviderSnapshotSettingsChanged,
   makeProviderSnapshotSettingsSource,
 } from "@t3tools/provider-core/server/snapshotSettings";
-import type { ProviderTextGeneration } from "@t3tools/provider-core/server/textGeneration";
+import { makeDshTextGeneration } from "./textGeneration.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
@@ -41,21 +40,6 @@ const MAINTENANCE = makeManualOnlyProviderMaintenanceCapabilities({
   provider: DSH_PROVIDER,
   packageName: null,
 });
-const unsupported = (operation: string) =>
-  Effect.fail(
-    new TextGenerationError({
-      operation,
-      detail: "DeepSeek Harness does not provide application text generation.",
-    }),
-  );
-const unsupportedTextGeneration: ProviderTextGeneration = {
-  generateCommitMessage: () => unsupported("generateCommitMessage"),
-  generatePrContent: () => unsupported("generatePrContent"),
-  generateBranchName: () => unsupported("generateBranchName"),
-  generateThreadTitle: () => unsupported("generateThreadTitle"),
-  generateReviewGuide: () => unsupported("generateReviewGuide"),
-  generateTranscriptionPostProcessing: () => unsupported("generateTranscriptionPostProcessing"),
-};
 const unsupportedOperation = (reason: AcpRegistryOperationErrorReason, message: string) =>
   Effect.fail(new AcpRegistryOperationError({ reason, message }));
 const listSessions = Effect.fn("Dsh.listSessions")(
@@ -272,7 +256,7 @@ export const DshDriver: ProviderDriver<DshSettings, DshDriverEnv> = {
       }),
       refreshModels: () => Effect.asVoid(refresh),
       orchestrationAdapter: adapter,
-      textGeneration: unsupportedTextGeneration,
+      textGeneration: yield* makeDshTextGeneration(settings, environment),
       acpSessionManagement: {
         listSessions: (params) =>
           listSessions(settings, environment, params).pipe(Effect.provide(services)),

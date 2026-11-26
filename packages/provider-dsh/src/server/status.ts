@@ -26,6 +26,8 @@ import {
   resolveDshBinary,
   dshInvocation,
   isDshAgent,
+  supportsDshToolFreeSession,
+  startDshToolFreeSession,
 } from "./acpSupport.ts";
 import { configuredDshModels, locateDshBridge } from "./localSync.ts";
 import { dshCommandCatalog } from "./commands.ts";
@@ -43,6 +45,7 @@ const snapshot = (
     commands,
     nativeSessions,
     previousModels,
+    supportsTextGeneration = false,
   }: Partial<Discovery> & { previousModels?: ServerProviderDraft["models"] | undefined } = {},
 ): ServerProviderDraft & { slashCommandsPending: boolean } => {
   const { models, subProviders } = dshCatalog(settings, config, previousModels);
@@ -64,7 +67,7 @@ const snapshot = (
       skills: commands?.skills ?? [],
     }),
     slashCommandsPending: settings.enabled && !commands,
-    supportsTextGeneration: false,
+    supportsTextGeneration,
     ...(subProviders.length ? { subProviders } : {}),
     ...(nativeSessions ? { nativeSessions } : {}),
   };
@@ -122,8 +125,21 @@ const probeConfiguration = Effect.fn("Dsh.probeConfiguration")(function* (
   const started = yield* runtime.start();
   const config = yield* runtime.getConfigOptions;
   if (capabilities?.close != null) yield* runtime.closeSession(started.sessionId);
+  // Exercise the same isolated home, bridge and empty tool restriction as generation.
+  // Discovery never sends a billable model prompt.
+  const supportsTextGeneration =
+    supportsDshToolFreeSession(initialized) &&
+    (yield* Effect.gen(function* () {
+      const isolated = yield* startDshToolFreeSession(settings, environment);
+      const options = yield* isolated.runtime.getConfigOptions;
+      yield* isolated.runtime.closeSession(isolated.started.sessionId);
+      return options.some(
+        (option) => option.id === "model" && option.type === "select" && !!option.currentValue,
+      );
+    }).pipe(Effect.orElseSucceed(() => false)));
   return {
     config,
+    supportsTextGeneration,
     commands: yield* Ref.get(commands),
     nativeSessions: {
       canList: capabilities?.list != null,
