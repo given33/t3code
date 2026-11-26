@@ -1,7 +1,8 @@
-import type {
-  ProviderApprovalOption,
-  ProviderInstanceEnvironment,
-  RuntimeMode,
+import {
+  isRuntimeModeAbove,
+  type ProviderApprovalOption,
+  type ProviderInstanceEnvironment,
+  type RuntimeMode,
 } from "@t3tools/contracts";
 import type { AcpAdapterV2Flavor } from "@t3tools/provider-acp/server/adapter";
 import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
@@ -37,6 +38,29 @@ export const DSH_SUPPORTED_RUNTIME_MODES = [
   "full-access",
 ] as const satisfies ReadonlyArray<RuntimeMode>;
 
+export function dshRuntimeModeForSessionMode(modeId: string): RuntimeMode | undefined {
+  switch (modeId) {
+    case "read-only":
+    case "workspace-write":
+      return "approval-required";
+    case "danger-full-access":
+      return "full-access";
+    case "auto":
+      return "auto";
+    default:
+      return undefined;
+  }
+}
+
+function boundedRuntimeMode(
+  policy: AcpRuntimePolicy & { readonly maxRuntimeMode?: RuntimeMode | undefined },
+): RuntimeMode {
+  return policy.maxRuntimeMode !== undefined &&
+    isRuntimeModeAbove(policy.runtimeMode, policy.maxRuntimeMode)
+    ? policy.maxRuntimeMode
+    : policy.runtimeMode;
+}
+
 export const dshSessionModeForPolicy: NonNullable<AcpAdapterV2Flavor["sessionModeForPolicy"]> = (
   policy,
   modes,
@@ -55,7 +79,7 @@ export const dshSessionModeForPolicy: NonNullable<AcpAdapterV2Flavor["sessionMod
     (policy.approvalPolicy !== undefined && policy.approvalPolicy !== "never")
   )
     return "workspace-write";
-  switch (policy.runtimeMode) {
+  switch (boundedRuntimeMode(policy)) {
     case "full-access":
       return "danger-full-access";
     case "auto":
@@ -64,7 +88,7 @@ export const dshSessionModeForPolicy: NonNullable<AcpAdapterV2Flavor["sessionMod
       return policy.maxRuntimeMode === undefined || policy.maxRuntimeMode === "full-access"
         ? "danger-full-access"
         : "workspace-write";
-    case "auto-accept-edits": // DSH has no edits-only preset. T3 handles edit approvals.
+    case "auto-accept-edits": // workspace-write may run shell tools without asking the ACP client.
     case "approval-required":
       return "workspace-write";
   }
@@ -102,12 +126,13 @@ export function dshApprovalOptions(
 }
 
 export function dshPermissionDisposition(
-  policy: AcpRuntimePolicy,
+  policy: AcpRuntimePolicy & { readonly maxRuntimeMode?: RuntimeMode | undefined },
   request: Acp.RequestPermissionRequest,
 ) {
+  const runtimeMode = boundedRuntimeMode(policy);
   const result = acpPermissionDisposition(
     // DSH Auto forwards requests its reviewer could not admit; let the user decide.
-    policy.runtimeMode === "auto" ? { ...policy, runtimeMode: "approval-required" } : policy,
+    { ...policy, runtimeMode: runtimeMode === "auto" ? "approval-required" : runtimeMode },
     request,
   );
   return result === "allow" &&

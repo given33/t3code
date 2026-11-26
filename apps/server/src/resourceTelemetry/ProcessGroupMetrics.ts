@@ -27,6 +27,10 @@ const processCount = Metric.gauge("t3_process_group_count", {
 // Each direct child of the server names the group of its whole subtree. A fixed set keeps one
 // series per group per server, however many agents and processes come and go.
 const PROVIDER_GROUPS: ReadonlyArray<readonly [RegExp, string]> = [
+  [
+    /(?:^|[\\/\s"'])(?:deepseek harness\.exe|dsh(?:\.(?:cmd|exe))?|dsh-desktop-host|t3-dsh-acp|deepseek-harness)(?=$|[\\/\s"'])/,
+    "dsh",
+  ],
   [/codex/, "codex"],
   [/claude/, "claude"],
   [/cursor/, "cursor"],

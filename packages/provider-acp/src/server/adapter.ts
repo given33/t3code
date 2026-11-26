@@ -526,6 +526,8 @@ export interface AcpAdapterV2Flavor {
    * `reasoningEffort` is its `effortLevel`).
    */
   readonly ownedModelOptionIds?: ReadonlyArray<string>;
+  /** A native permission preset can be absent from a particular agent or profile. */
+  readonly supportsRuntimeModeSwitch?: (modes: AcpSessionModeState | undefined) => boolean;
   readonly lockSessionModeToPolicy?: true;
   readonly sessionModeForPolicy?: (
     policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
@@ -1016,6 +1018,7 @@ function negotiatedCapabilities(
   modelOptionArrivesLate: boolean,
   forksFromTurn: boolean,
   steersWithPrompt: boolean,
+  supportsRuntimeModeSwitch: boolean | undefined,
 ): OrchestrationV2ProviderCapabilities {
   const agent = started.initializeResult.agentCapabilities ?? {};
   const session = agent.sessionCapabilities;
@@ -1029,6 +1032,8 @@ function negotiatedCapabilities(
     sessions: {
       ...base.sessions,
       supportsModelSwitchInSession: canSwitchModel,
+      supportsRuntimeModeSwitchInSession:
+        supportsRuntimeModeSwitch ?? base.sessions.supportsRuntimeModeSwitchInSession,
     },
     threads: {
       ...base.threads,
@@ -8230,6 +8235,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           flavor.modelOptionArrivesLate === true,
           flavor.forkFromTurn?.supported(started.initializeResult) === true,
           steersWithPrompt,
+          flavor.supportsRuntimeModeSwitch?.(yield* runtime.getModeState),
         );
         const canLoadSession = started.initializeResult.agentCapabilities?.loadSession === true;
         const canResumeSession =
@@ -8481,12 +8487,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             if (!advertisedValues.includes(selection.value)) continue;
             yield* runtime.setConfigOption(selection.id, selection.value);
           }
-          const policyMode = flavor.sessionModeForPolicy?.(
-            runtimePolicy,
-            yield* runtime.getModeState,
-          );
+          const currentModes = yield* runtime.getModeState;
+          const policyMode = flavor.sessionModeForPolicy?.(runtimePolicy, currentModes);
           const modeLocked = flavor.lockSessionModeToPolicy && policyMode !== undefined;
-          if (policyMode !== undefined) {
+          if (policyMode !== undefined && policyMode !== currentModes?.currentModeId) {
             yield* runtime.setMode(policyMode);
           }
           const modeState = yield* runtime.getModeState;
@@ -9707,7 +9711,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             } else {
               const configuredSelection = yield* Ref.get(activeSelection);
               const configuredInteractionMode = yield* Ref.get(activeInteractionMode);
+              // The sandbox, approval override or managed ceiling can change without changing the enum.
+              const liveModes = flavor.lockSessionModeToPolicy
+                ? yield* runtime.getModeState
+                : undefined;
+              const policyMode =
+                liveModes && flavor.sessionModeForPolicy?.(turnInput.runtimePolicy, liveModes);
               if (
+                (policyMode !== undefined && policyMode !== liveModes?.currentModeId) ||
                 configuredSelection === null ||
                 !modelSelectionsEqual(configuredSelection, turnInput.modelSelection) ||
                 configuredInteractionMode !== turnInput.runtimePolicy.interactionMode ||

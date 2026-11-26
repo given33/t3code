@@ -121,7 +121,10 @@ it.layer(nodeLayer)("DeepSeek ACP adapter", (it) => {
         expect(flavor.mcpOverHttp).toBe(true);
         expect(flavor.capabilities).toBe(DshProviderCapabilitiesV2);
         expect(flavor.capabilities).toMatchObject({
-          sessions: { supportsModelSwitchInSession: true },
+          sessions: {
+            supportsModelSwitchInSession: true,
+            supportsRuntimeModeSwitchInSession: true,
+          },
           tools: { supportsMcpTools: true },
           threads: { canRollbackThread: true, canForkThread: false, canForkFromTurn: false },
           turns: { supportsActiveSteering: false },

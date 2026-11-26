@@ -34,6 +34,33 @@ const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const FOLDED_SERVER_SETTINGS = { ...DEFAULT_SERVER_SETTINGS, projectSettingsFolded: true };
 
 describe("fallbackTextGenerationModelSelection", () => {
+  it("uses the default DSH model when only DSH can generate text", () => {
+    expect(fallbackTextGenerationModelSelection({}, (id) => id === "dsh")).toEqual({
+      instanceId: "dsh",
+      model: "default",
+    });
+  });
+
+  it("tries the configured DSH instance's custom model before its driver default", () => {
+    const instanceId = ProviderInstanceId.make("dsh_work");
+    const custom = { instanceId, model: "custom-dsh" };
+    const instances = {
+      [instanceId]: {
+        driver: ProviderDriverKind.make("dsh"),
+        config: { customModels: [custom.model] },
+      },
+    };
+    for (const model of [custom.model, "default"]) {
+      expect(
+        fallbackTextGenerationModelSelection(
+          instances,
+          (id, driver, candidate) => id === instanceId && driver === "dsh" && candidate === model,
+          { defaultModelSelection: custom },
+        ),
+      ).toEqual({ instanceId, model });
+    }
+  });
+
   it("uses Big Pickle when only OpenCode is enabled", () => {
     expect(
       fallbackTextGenerationModelSelection({}, (instanceId) => instanceId === "opencode"),

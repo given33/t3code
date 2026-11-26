@@ -44,6 +44,76 @@ const create = Effect.fn(function* (
 });
 
 it.layer(driverLayer)("DshDriver", (it) => {
+  it.effect("applies the current permission policy before each prompt on one native session", () =>
+    Effect.gen(function* () {
+      const f = yield* create("mode-switch", "modes");
+      const modelSelection = {
+        instanceId: f.instance.instanceId,
+        model: "default",
+        options: [{ id: "_t3/session-mode", value: "danger-full-access" }],
+      };
+      const threadId = ThreadId.make("mode-switch");
+      const policies = [
+        { runtimeMode: "approval-required" },
+        { runtimeMode: "full-access" },
+        { runtimeMode: "approval-required" },
+        { runtimeMode: "full-access", maxRuntimeMode: "approval-required" },
+        { runtimeMode: "full-access", sandboxPolicy: { type: "readOnly" } },
+        { runtimeMode: "full-access", approvalPolicy: "on-request" },
+        { runtimeMode: "full-access" },
+      ] as const;
+      const turns = policies.map((policy) =>
+        ProviderAdapterV2RuntimePolicy.make({
+          ...policy,
+          cwd: f.directory,
+          interactionMode: "default",
+        }),
+      );
+      const setup = { threadId, modelSelection, runtimePolicy: turns[0]! };
+      const session = yield* f.instance.orchestrationAdapter.openSession({
+        ...setup,
+        providerSessionId: ProviderSessionId.make("mode-switch"),
+      });
+      const providerThread = yield* session.ensureThread(setup);
+      for (const [i, runtimePolicy] of turns.entries()) {
+        yield* session.startTurn(
+          yield* turnInput({ ...setup, runtimePolicy, providerThread }, i + 1, "hello"),
+        );
+        yield* session.events.pipe(
+          Stream.takeUntil((e) => e.type === "turn.terminal"),
+          Stream.runDrain,
+        );
+      }
+      const wire = (yield* f.log).filter((e) =>
+        [
+          "session/new",
+          "session/set_mode",
+          "session/prompt",
+          "session/resume",
+          "session/load",
+        ].includes(e.method),
+      );
+      expect(wire.map((e) => e.modeId ?? e.method)).toEqual([
+        "session/new",
+        "workspace-write",
+        "session/prompt",
+        "danger-full-access",
+        "session/prompt",
+        "workspace-write",
+        "session/prompt",
+        "session/prompt",
+        "read-only",
+        "session/prompt",
+        "workspace-write",
+        "session/prompt",
+        "danger-full-access",
+        "session/prompt",
+      ]);
+      expect(wire.filter((e) => e.modeId).every((e) => e.sessionId === "sample-session")).toBe(
+        true,
+      );
+    }),
+  );
   it.effect("rejects rollback with ProviderAdapterProtocolError while a DSH turn is active", () =>
     Effect.gen(function* () {
       const f = yield* create("rollback");
@@ -204,6 +274,9 @@ it.layer(driverLayer)("DshDriver", (it) => {
         modelSelection,
         runtimePolicy,
       });
+      expect(session.providerSession.capabilities.sessions.supportsRuntimeModeSwitchInSession).toBe(
+        expected !== undefined,
+      );
       yield* session.ensureThread({ threadId, modelSelection, runtimePolicy });
       expect(
         (yield* f.log).filter((m) =>

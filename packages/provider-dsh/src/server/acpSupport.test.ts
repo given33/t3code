@@ -2,7 +2,22 @@ import { describe, expect, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import * as Effect from "effect/Effect";
-import { resolveDshBinary, dshEnvironment, dshInvocation } from "./acpSupport.ts";
+import {
+  resolveDshBinary,
+  dshEnvironment,
+  dshInvocation,
+  dshRuntimeModeForSessionMode,
+} from "./acpSupport.ts";
+
+it.each([
+  ["read-only", "approval-required"],
+  ["workspace-write", "approval-required"],
+  ["auto", "auto"],
+  ["danger-full-access", "full-access"],
+  ["custom", undefined],
+] as const)("maps native permission mode %s to %s", (mode, expected) => {
+  expect(dshRuntimeModeForSessionMode(mode)).toBe(expected);
+});
 
 const home = "/home/test";
 const desktop =

@@ -35,6 +35,7 @@ import {
   dshApprovalOptions,
   dshEnvironment,
   dshPermissionDisposition,
+  dshRuntimeModeForSessionMode,
   dshSessionModeForPolicy,
   makeDshAcpRuntime,
 } from "./acpSupport.ts";
@@ -44,7 +45,11 @@ import { DSH_PROVIDER } from "./status.ts";
 const isRequestError = Schema.is(AcpRequestError);
 export const DshProviderCapabilitiesV2 = {
   ...AcpProviderCapabilitiesV2,
-  sessions: { ...AcpProviderCapabilitiesV2.sessions, supportsModelSwitchInSession: true },
+  sessions: {
+    ...AcpProviderCapabilitiesV2.sessions,
+    supportsModelSwitchInSession: true,
+    supportsRuntimeModeSwitchInSession: true,
+  },
   tools: { ...AcpProviderCapabilitiesV2.tools, supportsMcpTools: true },
 } satisfies OrchestrationV2ProviderCapabilities;
 
@@ -157,6 +162,11 @@ export function dshFlavor(options: DshAdapterV2Options): AcpAdapterV2Flavor {
     compactViaAdvertisedCommand: true,
     mcpOverHttp: true,
     promptFailure: dshPromptFailure,
+    supportsRuntimeModeSwitch: (modes) =>
+      ["workspace-write", "danger-full-access"].every((id) =>
+        modes?.availableModes.some((mode) => mode.id === id),
+      ),
+    runtimeModeForSessionMode: dshRuntimeModeForSessionMode,
     sessionModeForPolicy: dshSessionModeForPolicy,
     lockSessionModeToPolicy: true,
     permissionDisposition: dshPermissionDisposition,

@@ -32,6 +32,29 @@ const process = (
   }) as ResourceTelemetryProcess;
 
 describe("groupProcesses", () => {
+  it.each([
+    ["DeepSeek Harness.exe", "", "dsh"],
+    ["dsh", "", "dsh"],
+    ["dsh.cmd", "", "dsh"],
+    ["DSH.EXE", "", "dsh"],
+    ["node.exe", String.raw`node "C:\Program Files\dsh-desktop-host\lib\cli.js"`, "dsh"],
+    ["bun", "bun /opt/t3-dsh-acp/index.js", "dsh"],
+    ["node", "node /opt/deepseek-harness/bin/main.js", "dsh"],
+    ["node", "node /opt/bin/dsh --profile acp", "dsh"],
+    ["dash", "dash", "terminal"],
+    ["fish", "fish", "terminal"],
+    ["bash", "bash -c 'echo dsh'", "terminal"],
+    ["ssh", "ssh dsh", "other"],
+    ["node", "node /opt/not-dsh/bin.js", "other"],
+    ["node", "node /opt/deepseek-harness-backup/main.js", "other"],
+  ])("groups %s (%s) as %s", (name, command, group) => {
+    const totals = groupProcesses([
+      process(1, 0, "node", "server"),
+      process(2, 1, name, "server-child", command),
+    ]);
+    assert.deepStrictEqual([...totals.keys()], ["server", group]);
+  });
+
   it("sums each direct child of the server with its whole subtree", () => {
     const totals = groupProcesses([
       process(10, 1, "node", "server"),
