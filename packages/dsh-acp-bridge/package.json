@@ -10,6 +10,7 @@
     "test": "vp test run --config ../../vite.config.ts --dir .",
     "test:cancel": "node scripts/cancel.mjs",
     "test:mcp": "node scripts/mcp.mjs",
+    "test:mcp-stdio": "node scripts/mcp-stdio.mjs",
     "test:tools": "node scripts/tools.mjs",
     "test:modes": "node scripts/modes.mjs",
     "test:commands": "node scripts/commands.mjs",
