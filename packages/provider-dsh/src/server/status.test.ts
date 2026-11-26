@@ -24,6 +24,7 @@ it.layer(nodeLayer)("DeepSeek Harness status", (it) => {
           );
           expect(result).toMatchObject({
             status: "warning",
+            supportsConversationRollback: discover,
             slashCommands: [],
             message: expect.stringContaining(`${file}. Using the official`),
           });
@@ -44,6 +45,7 @@ it.layer(nodeLayer)("DeepSeek Harness status", (it) => {
           version: "0.2.3-alpha.2",
           status: "ready",
           showInteractionModeToggle: true,
+          supportsConversationRollback: false,
         });
         expect((yield* f.log).map((entry) => entry.method)).toEqual(["version"]);
       }),
@@ -86,6 +88,7 @@ it.layer(nodeLayer)("DeepSeek Harness status", (it) => {
           { ...f.settings, bridgeEnabled: true },
           f.environment,
         );
+        expect(snapshot.supportsConversationRollback).toBe(true);
         expect(snapshot.supportsTextGeneration).toBe(expected);
         expect((yield* f.log).filter((e) => e.method === "session/prompt")).toHaveLength(0);
       }),
@@ -217,6 +220,7 @@ it.layer(nodeLayer)("DeepSeek Harness status", (it) => {
           status: "warning",
           version: "0.2.3-alpha.2",
           message: expect.stringContaining("ACP"),
+          supportsConversationRollback: false,
           models: [{ slug: "default" }],
         });
         const patch = (yield* f.log).find((e) => e.patchPath)?.patchPath;

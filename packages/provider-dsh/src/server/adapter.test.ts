@@ -119,12 +119,16 @@ it.layer(nodeLayer)("DeepSeek ACP adapter", (it) => {
         });
         expect(flavor.reinjectInstructionsEveryTurn).toBeUndefined();
         expect(flavor.mcpOverHttp).toBe(true);
-        expect(DshProviderCapabilitiesV2).toMatchObject({
+        expect(flavor.capabilities).toBe(DshProviderCapabilitiesV2);
+        expect(flavor.capabilities).toMatchObject({
           sessions: { supportsModelSwitchInSession: true },
           tools: { supportsMcpTools: true },
-          threads: { canForkThread: false, canForkFromTurn: false },
+          threads: { canRollbackThread: true, canForkThread: false, canForkFromTurn: false },
           turns: { supportsActiveSteering: false },
-          checkpointing: { providerCanRollbackConversation: false },
+          checkpointing: {
+            providerCanRollbackConversation: false,
+            providerRollbackReturnsSnapshot: true,
+          },
         });
         const runtime = yield* makeDshAcpRuntime({
           ...f,

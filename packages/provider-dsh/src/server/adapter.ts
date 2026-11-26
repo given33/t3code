@@ -23,11 +23,11 @@ import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEve
 import type * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { resolveSelfInvocation, type SelfInvocation } from "@t3tools/shared/nodeRuntime";
-import type * as Context from "effect/Context";
+import * as Context from "effect/Context";
 import type * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
-import type * as FileSystem from "effect/FileSystem";
-import type * as Path from "effect/Path";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { AcpRequestError } from "effect-acp/errors";
@@ -45,7 +45,6 @@ const isRequestError = Schema.is(AcpRequestError);
 export const DshProviderCapabilitiesV2 = {
   ...AcpProviderCapabilitiesV2,
   sessions: { ...AcpProviderCapabilitiesV2.sessions, supportsModelSwitchInSession: true },
-  threads: { ...AcpProviderCapabilitiesV2.threads, canRollbackThread: false },
   tools: { ...AcpProviderCapabilitiesV2.tools, supportsMcpTools: true },
 } satisfies OrchestrationV2ProviderCapabilities;
 
@@ -121,6 +120,8 @@ interface DshAdapterV2Options {
 }
 
 export function dshFlavor(options: DshAdapterV2Options): AcpAdapterV2Flavor {
+  // Keep the per-runtime Scope supplied by ACP. The driver context also contains its longer-lived scope.
+  const fileServices = Context.pick(FileSystem.FileSystem, Path.Path)(options.services);
   return {
     driver: DSH_PROVIDER,
     runtimeHarness: "DeepSeek Harness",
@@ -143,7 +144,7 @@ export function dshFlavor(options: DshAdapterV2Options): AcpAdapterV2Flavor {
               )
             : Effect.void;
         }),
-        Effect.provide(options.services),
+        Effect.provide(fileServices),
         Effect.mapError((e) =>
           e._tag === "PlatformError"
             ? AcpRequestError.invalidRequest("Could not prepare DSH runtime files.")

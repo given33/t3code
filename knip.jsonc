@@ -163,6 +163,10 @@
       // These workspace packages are private to this monorepo.
       "includeEntryExports": true,
     },
+    "packages/dsh-acp-bridge": {
+      // The rewind audit preloads this observer in its child server with --import.
+      "entry": ["src/index.ts", "scripts/rewind-witness.mjs"],
+    },
     "packages/effect-acp": {
       "includeEntryExports": true,
       "entry": ["test/fixtures/*.ts"],

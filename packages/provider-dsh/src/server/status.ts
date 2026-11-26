@@ -57,7 +57,8 @@ const snapshot = (
         reportsContextWindow: settings.enabled,
         showInteractionModeToggle: settings.enabled,
         supportedRuntimeModes: DSH_SUPPORTED_RUNTIME_MODES,
-        supportsConversationRollback: false,
+        // Discovery opened a session with a recognized DSH agent. Both bridges support replacement.
+        supportsConversationRollback: nativeSessions !== undefined,
       },
       enabled: settings.enabled,
       checkedAt,

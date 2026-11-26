@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import {
+  CheckpointId,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   ProviderSessionId,
@@ -43,6 +44,45 @@ const create = Effect.fn(function* (
 });
 
 it.layer(driverLayer)("DshDriver", (it) => {
+  it.effect("rejects rollback with ProviderAdapterProtocolError while a DSH turn is active", () =>
+    Effect.gen(function* () {
+      const f = yield* create("rollback");
+      const setup = {
+        threadId: ThreadId.make("rollback"),
+        modelSelection: { instanceId: f.instance.instanceId, model: "default" },
+        runtimePolicy: ProviderAdapterV2RuntimePolicy.make({
+          cwd: f.directory,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+        }),
+      };
+      const session = yield* f.instance.orchestrationAdapter.openSession({
+        ...setup,
+        providerSessionId: ProviderSessionId.make("rollback"),
+      });
+      const providerThread = yield* session.ensureThread(setup);
+      yield* session.startTurn(yield* turnInput({ ...setup, providerThread }, 1, "wait"));
+      const error = yield* Effect.flip(
+        session.rollbackThread({
+          providerThread,
+          providerThreadTurns: [],
+          target: {
+            type: "thread_start",
+            checkpointId: CheckpointId.make("start"),
+            appRunOrdinal: 0,
+          },
+        }),
+      );
+      expect(error).toMatchObject({
+        _tag: "ProviderAdapterRollbackThreadError",
+        cause: {
+          _tag: "ProviderAdapterProtocolError",
+          detail: expect.stringContaining("is active"),
+        },
+      });
+      expect((yield* f.log).filter((entry) => entry.method === "session/new")).toHaveLength(1);
+    }),
+  );
   it.effect("bounds an unresponsive title process with an explicit timeout error", () =>
     Effect.gen(function* () {
       const launching = yield* Deferred.make<void>();
