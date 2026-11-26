@@ -1,0 +1,98 @@
+[
+  {
+    "sessionUpdate": "plan",
+    "entries": [
+      {
+        "content": "Create fixture",
+        "status": "completed",
+        "priority": "medium"
+      },
+      {
+        "content": "Inspect fixture",
+        "status": "in_progress",
+        "priority": "medium"
+      },
+      {
+        "content": "Write report",
+        "status": "pending",
+        "priority": "medium"
+      }
+    ]
+  },
+  {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "call_offline_1|fc_offline_1",
+    "status": "pending",
+    "title": "Get-Content -LiteralPath acp-fixture.txt",
+    "kind": "execute",
+    "rawInput": {
+      "description": "Read the offline ACP test fixture",
+      "command": "Get-Content -LiteralPath acp-fixture.txt"
+    }
+  },
+  {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "call_offline_1|fc_offline_1",
+    "status": "completed",
+    "content": [
+      {
+        "type": "content",
+        "content": {
+          "type": "text",
+          "text": "offline pwsh verified\r\n"
+        }
+      }
+    ],
+    "rawOutput": [
+      {
+        "type": "text",
+        "text": "offline pwsh verified\r\n"
+      }
+    ]
+  },
+  {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "call_offline_2|fc_offline_2",
+    "status": "pending",
+    "title": "Read acp-fixture.txt",
+    "kind": "read",
+    "rawInput": {
+      "file_path": "acp-fixture.txt"
+    },
+    "locations": [
+      {
+        "path": "/workspace/render/acp-fixture.txt",
+        "line": 1
+      }
+    ]
+  },
+  {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "call_offline_3|fc_offline_3",
+    "status": "pending",
+    "title": "report.txt",
+    "kind": "edit",
+    "rawInput": {
+      "file_path": "report.txt",
+      "content": "Projection verified\n"
+    },
+    "locations": [
+      {
+        "path": "/workspace/render/report.txt"
+      }
+    ],
+    "content": [
+      {
+        "type": "diff",
+        "path": "/workspace/render/report.txt",
+        "oldText": null,
+        "newText": "Projection verified\n"
+      }
+    ]
+  },
+  {
+    "sessionUpdate": "usage_update",
+    "used": 32000,
+    "size": 128000
+  }
+]

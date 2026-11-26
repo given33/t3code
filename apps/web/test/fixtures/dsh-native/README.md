@@ -1,0 +1,7 @@
+# DSH native UI replay
+
+From the repository root, run `node apps/web/test/fixtures/dsh-native/generate.mjs` with workspace dependencies installed. The generator uses a scoped temporary DSH home and a local stdio peer and writes `projected.json` next to its input.
+
+The first five `frames.json` updates come from T18 `tools.log` on `a0ef26d1`, emitted by `packages/dsh-acp-bridge/scripts/tools.mjs`: the three-entry plan, the terminal call and its completion, the read with a location, and the edit carrying an ACP `diff`. Only the temporary workspace paths were replaced with `/workspace/render`. The sixth frame is a synthetic `usage_update` with a known fraction (32,000 / 128,000).
+
+`agent.mjs` answers the ACP handshake and emits those updates on `session/prompt`. The production `DshDriver` runs its normal `dshFlavor` and `packages/provider-acp/src/server/adapter.ts` projection. Ending the turn also completes the pending read and edit. `generate.mjs` extracts the resulting turn items and context usage. To keep the file deterministic, it omits run-specific identity and timestamps and uses the native item ID for the item and plan keys. The browser test attaches each item to its test thread and run, supplies timestamps using the fake environment, and sends it on the normal thread subscription. Model, command, skill and permission tests use an enabled provider configuration matching the DSH catalog.

@@ -1,0 +1,92 @@
+{
+  "items": [
+    {
+      "id": "browser-replay:turn:1:plan:legacy",
+      "ordinal": 101,
+      "status": "running",
+      "title": null,
+      "type": "todo_list",
+      "steps": [
+        {
+          "id": "acp-step-1",
+          "text": "Create fixture",
+          "status": "completed"
+        },
+        {
+          "id": "acp-step-2",
+          "text": "Inspect fixture",
+          "status": "running"
+        },
+        {
+          "id": "acp-step-3",
+          "text": "Write report",
+          "status": "pending"
+        }
+      ],
+      "planId": "browser-replay:turn:1:plan:legacy"
+    },
+    {
+      "id": "call_offline_1|fc_offline_1",
+      "ordinal": 102,
+      "status": "pending",
+      "title": "Ran command",
+      "type": "command_execution",
+      "input": "Get-Content -LiteralPath acp-fixture.txt"
+    },
+    {
+      "id": "call_offline_1|fc_offline_1",
+      "ordinal": 102,
+      "status": "completed",
+      "title": "Ran command",
+      "type": "command_execution",
+      "input": "Get-Content -LiteralPath acp-fixture.txt",
+      "output": "offline pwsh verified\r\n"
+    },
+    {
+      "id": "call_offline_2|fc_offline_2",
+      "ordinal": 103,
+      "status": "pending",
+      "title": "Read /workspace/render/acp-fixture.txt",
+      "type": "dynamic_tool",
+      "input": {
+        "file_path": "acp-fixture.txt",
+        "path": "/workspace/render/acp-fixture.txt"
+      },
+      "toolName": "Read"
+    },
+    {
+      "id": "call_offline_3|fc_offline_3",
+      "ordinal": 104,
+      "status": "pending",
+      "title": "Changed files",
+      "type": "file_change",
+      "fileName": "/workspace/render/report.txt",
+      "diffStr": "--- /dev/null\n+++ /workspace/render/report.txt\n@@ -0,0 +1,1 @@\n+Projection verified\n"
+    },
+    {
+      "id": "call_offline_2|fc_offline_2",
+      "ordinal": 103,
+      "status": "completed",
+      "title": "Read /workspace/render/acp-fixture.txt",
+      "type": "dynamic_tool",
+      "input": {
+        "file_path": "acp-fixture.txt",
+        "path": "/workspace/render/acp-fixture.txt"
+      },
+      "toolName": "Read"
+    },
+    {
+      "id": "call_offline_3|fc_offline_3",
+      "ordinal": 104,
+      "status": "completed",
+      "title": "Changed files",
+      "type": "file_change",
+      "fileName": "/workspace/render/report.txt",
+      "diffStr": "--- /dev/null\n+++ /workspace/render/report.txt\n@@ -0,0 +1,1 @@\n+Projection verified\n"
+    }
+  ],
+  "contextUsage": {
+    "usedTokens": 32000,
+    "maxTokens": 128000
+  }
+}
