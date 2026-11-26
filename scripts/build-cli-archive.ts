@@ -613,6 +613,7 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
       ? path.join(serverDir, "dist-exe", executableName)
       : targetExecutable;
   const webClient = path.join(serverDir, "dist/client");
+  const bridge = path.join(serverDir, "dist/dsh-acp-bridge/index.js");
   const resourceMonitorDir = Option.getOrElse(input.resourceMonitorDir, () =>
     path.join(serverDir, "dist/resource-monitor"),
   );
@@ -622,6 +623,7 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
     `Run \`node apps/server/scripts/cli.ts build-exe${targetKey === hostKey ? "" : ` --target ${targetKey}`}\` first.`,
   );
   yield* requireInput(path.join(webClient, "index.html"), "Run `vp run --filter t3 build` first.");
+  yield* requireInput(bridge, "Run `vp run --filter t3 build` first.");
   yield* requireInput(
     resourceMonitorDir,
     "Build the resource monitor or pass --resource-monitor-dir.",
@@ -635,6 +637,9 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
   yield* Effect.log(`[cli-archive] Staging ${stem}...`);
   yield* fs.copyFile(builtExecutable, path.join(contentDir, executableName));
   yield* stageWebClient(webClient, path.join(contentDir, "client"));
+  const bridgeDir = path.join(contentDir, "dsh-acp-bridge");
+  yield* fs.makeDirectory(bridgeDir);
+  yield* fs.copyFile(bridge, path.join(bridgeDir, "index.js"));
   yield* fs.copy(resourceMonitorDir, path.join(contentDir, "resource-monitor"));
   yield* stageRuntimeExternals({
     repoRoot,

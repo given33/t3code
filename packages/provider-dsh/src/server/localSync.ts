@@ -366,15 +366,24 @@ export const locateDshBridge = Effect.fn("Dsh.locateBridge")(function* (
   if (!settings.bridgeEnabled) return {};
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
-  // An explicit override is authoritative, even if missing. Otherwise check beside the
-  // server bundle first, then the sibling workspace package used by source-based launches.
+  // An explicit override is authoritative, even if missing.
   const override = env.T3_DSH_BRIDGE_PATH?.trim();
-  const candidates = override
-    ? [override]
-    : [
-        fileURLToPath(new URL("./dsh-acp-bridge/index.js", moduleUrl)),
-        fileURLToPath(new URL("../../../dsh-acp-bridge/dist/index.js", moduleUrl)),
-      ];
+  const candidates: string[] = [];
+  if (override) {
+    candidates.push(override);
+  } else {
+    const base = URL.parse(moduleUrl);
+    if (base?.protocol === "file:") {
+      candidates.push(
+        fileURLToPath(new URL("./dsh-acp-bridge/index.js", base)),
+        fileURLToPath(new URL("../../../dsh-acp-bridge/dist/index.js", base)),
+      );
+    }
+    // A SEA can load its embedded server module from a virtual URL.
+    const executable = yield* HostProcess.ExecutablePath;
+    const packaged = path.join(path.dirname(executable), "dsh-acp-bridge", "index.js");
+    if (!candidates.includes(packaged)) candidates.push(packaged);
+  }
   for (const file of candidates) {
     const info = yield* fs.stat(file).pipe(Effect.orElseSucceed(() => undefined));
     if (info?.type === "File") return { url: pathToFileURL(path.resolve(file)).href };

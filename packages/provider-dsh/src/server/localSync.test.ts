@@ -84,16 +84,23 @@ it.layer(nodeLayer)("DSH profile overlays", (it) => {
       const sibling = path.join(moduleDir, "dsh-acp-bridge", "index.js");
       const source = path.join(home, "packages", "dsh-acp-bridge", "dist", "index.js");
       const override = path.join(home, "custom bridge.js");
-      const locate = (file?: string, bridgeEnabled = true) =>
+      const executable = path.join(home, "runtime", "t3.exe");
+      const packaged = path.join(home, "runtime", "dsh-acp-bridge", "index.js");
+      const locate = (file?: string, bridgeEnabled = true, url = moduleUrl) =>
         locateDshBridge(
           decodeDshSettings({ bridgeEnabled }),
           { T3_DSH_BRIDGE_PATH: file },
-          moduleUrl,
-        );
+          url,
+        ).pipe(Effect.provideService(HostProcess.ExecutablePath, executable));
 
       expect(yield* locate()).toEqual({
-        warning: `T3 DSH bridge unavailable at ${sibling}, ${source}. Using the official DeepSeek Harness ACP bridge.`,
+        warning: `T3 DSH bridge unavailable at ${sibling}, ${source}, ${packaged}. Using the official DeepSeek Harness ACP bridge.`,
       });
+      yield* fs.makeDirectory(path.dirname(packaged), { recursive: true });
+      yield* fs.writeFileString(packaged, "");
+      const packagedUrl = (yield* path.toFileUrl(packaged)).href;
+      expect(yield* locate()).toEqual({ url: packagedUrl });
+      expect(yield* locate(undefined, true, "node:sea")).toEqual({ url: packagedUrl });
       yield* fs.makeDirectory(path.dirname(source), { recursive: true });
       yield* fs.writeFileString(source, "");
       expect(yield* locate()).toEqual({ url: (yield* path.toFileUrl(source)).href });
