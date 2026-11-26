@@ -33,6 +33,20 @@ const config = () => [
     type: "select",
     name: "Model",
     currentValue: model,
+    ...(process.env.DSH_TEST_CASE === "t3-bridge" && {
+      _meta: {
+        "t3.dsh.modelReasoning": {
+          [ids[1]]: {
+            id: "reasoning_effort",
+            type: "select",
+            category: "thought_level",
+            name: "Reasoning",
+            currentValue: "high",
+            options: [{ value: "high", name: "High" }],
+          },
+        },
+      },
+    }),
     options: ids.map((value, i) => ({
       group: i ? "beta" : "alpha",
       name: i ? "Beta" : "Alpha",

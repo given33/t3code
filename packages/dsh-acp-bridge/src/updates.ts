@@ -1,6 +1,7 @@
 import * as NodePath from "node:path";
 import type {
   Agent,
+  AssistantStreamFrame,
   ContentBlock,
   Context,
   FileDiff,
@@ -15,19 +16,90 @@ import type {
 
 import { assistantBlockToAcp } from "./content.ts";
 
+/** ACP chunks are append-only. After a gap or interleaved block, let the commit deliver the remaining suffix. */
+export class AssistantStream {
+  readonly sent = { text: "", reasoning: "" };
+  private next = 0;
+  private deferred = false;
+  private open: { index: number; text: string } | undefined;
+  private readonly closed = new Set<number>();
+  private pendingBreak = "";
+
+  constructor(readonly start: Extract<AssistantStreamFrame, { type: "start" }>) {}
+
+  chunk(frame: Extract<AssistantStreamFrame, { type: "chunk" }>): SessionUpdate | undefined {
+    if (this.deferred || frame.index < this.next) return;
+    const chunk = frame.chunk;
+    if (frame.index !== this.next++) this.deferred = true;
+    if (this.deferred || !("index" in chunk) || this.closed.has(chunk.index)) return;
+    if (this.open && this.open.index !== chunk.index) {
+      this.deferred = true;
+      return;
+    }
+    this.open ??= { index: chunk.index, text: "" };
+    if (chunk.type === "block-end") {
+      const block = chunk.block;
+      this.deferred =
+        block.type === "image" ||
+        ((block.type === "text" || block.type === "reasoning") && block.text !== this.open.text);
+      this.closed.add(chunk.index);
+      this.open = undefined;
+      this.pendingBreak = "";
+      return;
+    }
+    if ((chunk.type !== "text-delta" && chunk.type !== "reasoning-delta") || !chunk.text) return;
+    const thought = chunk.type === "reasoning-delta";
+    let text = this.pendingBreak + chunk.text;
+    this.pendingBreak = "";
+    // pi-ai emits a paragraph break for summary_part.done and removes the last one at block-end.
+    if (thought && text.endsWith("\n")) {
+      this.pendingBreak = text.endsWith("\n\n") ? "\n\n" : "\n";
+      text = text.slice(0, -this.pendingBreak.length);
+    }
+    if (!text) return;
+    this.open.text += text;
+    this.sent[thought ? "reasoning" : "text"] += text;
+    return {
+      sessionUpdate: thought ? "agent_thought_chunk" : "agent_message_chunk",
+      messageId: this.start.attemptId,
+      content: { type: "text", text },
+    };
+  }
+}
+
 /** Convert one committed assistant message and its context usage in block order. */
 export async function assistantUpdates(
   ctx: Context,
   session: Session,
   event: SessionEvent<"assistant/message">,
+  stream?: AssistantStream,
 ): Promise<SessionUpdate[]> {
   const updates: SessionUpdate[] = [];
-  for (const block of event.data.message.content) {
+  const messageId = stream?.start.attemptId ?? event.data.message.id;
+  const pending = { ...stream?.sent };
+  for (let block of event.data.message.content) {
+    if (block.type === "text" || block.type === "reasoning") {
+      const prefix = pending[block.type];
+      if (prefix) {
+        if (prefix.startsWith(block.text)) {
+          pending[block.type] = prefix.slice(block.text.length);
+          continue;
+        }
+        pending[block.type] = "";
+        if (!block.text.startsWith(prefix)) {
+          ctx.logger.warn(
+            `acp: committed ${block.type} differs from its stream, keeping streamed output`,
+          );
+          continue;
+        }
+        block = { ...block, text: block.text.slice(prefix.length) };
+      }
+    }
     if (block.type === "reasoning") {
       if (block.text.length > 0) {
         updates.push({
           sessionUpdate: "agent_thought_chunk",
-          messageId: event.data.message.id,
+          messageId,
           content: { type: "text", text: block.text },
         });
       }
@@ -37,11 +109,13 @@ export async function assistantUpdates(
     if (content !== undefined) {
       updates.push({
         sessionUpdate: "agent_message_chunk",
-        messageId: event.data.message.id,
+        messageId,
         content,
       });
     }
   }
+  if (pending.text || pending.reasoning)
+    ctx.logger.warn("acp: committed message is shorter than its stream, keeping streamed output");
   const usage = usageUpdate(ctx, session, event);
   if (usage !== undefined) updates.push(usage);
   return updates;

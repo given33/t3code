@@ -17,6 +17,7 @@
     "test:handoff-modes": "node scripts/handoff-and-modes.mjs",
     "test:rewind": "node scripts/rewind.mjs",
     "test:steer": "node scripts/steer.mjs",
+    "test:streaming": "node scripts/streaming.mjs",
     "test:text-generation": "node scripts/text-generation.mjs",
     "audit:server-mcp": "node scripts/audit-server-mcp.mjs",
     "test:parity": "node scripts/parity.mjs",

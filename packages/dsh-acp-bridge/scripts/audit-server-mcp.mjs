@@ -44,7 +44,7 @@ const proxy = NodeHttp.createServer(async (req, res) => {
       NodeAssert.ok(findTool("delegate_task"));
       NodeAssert.equal(findTool("t3_background_wait"), undefined);
       calls.push(
-        { name: findTool("orchestrator_capabilities"), args: {} },
+        { name: findTool("orchestrator_capabilities"), args: { search: "dsh" } },
         { name: findTool("device_list"), args: {} },
         { name: findTool("preview_status"), args: {} },
         {
@@ -88,9 +88,26 @@ const proxy = NodeHttp.createServer(async (req, res) => {
 try {
   proxy.listen(0, "127.0.0.1");
   await once(proxy, "listening");
-  const { variables } = await offlineProfile(root, true, {
-    url: `http://127.0.0.1:${proxy.address().port}/v1`,
-  });
+  const url = `http://127.0.0.1:${proxy.address().port}/v1`;
+  const secondary = "t3-catalog";
+  const { variables } = await offlineProfile(
+    root,
+    true,
+    { url },
+    [],
+    { reasoningEfforts: { low: "low" } },
+    {
+      [secondary]: {
+        api: "openai-responses",
+        apiKeyEnv: "T3_OFFLINE_KEY",
+        baseURL: url,
+        models: [
+          { id: "analyst", name: "Analyst", reasoningEfforts: { high: "high", max: "max" } },
+          { id: "plain", name: "Plain" },
+        ],
+      },
+    },
+  );
   await withAuditServer(
     {
       root,
@@ -172,7 +189,24 @@ try {
         "child model never ran",
       );
       const [capabilities, devices, preview, html, delegated] = outputs;
-      NodeAssert.equal(JSON.parse(capabilities).inheritedProviderInstanceId, "dsh");
+      const catalog = JSON.parse(capabilities);
+      NodeAssert.equal(catalog.inheritedProviderInstanceId, "dsh");
+      const models = catalog.providers.find((p) => p.providerInstanceId === "dsh").models;
+      const effort = (id) => {
+        const model = models.find((m) => m.id === id);
+        NodeAssert.ok(model, `Missing MCP model ${id}`);
+        return model.options?.find((o) => o.id === "reasoning_effort")?.values;
+      };
+      const first = effort(route),
+        other = effort(JSON.stringify([secondary, "analyst"]));
+      NodeAssert.ok(first.includes("low") && !first.includes("max"));
+      NodeAssert.ok(other.includes("max") && !other.includes("low"));
+      NodeAssert.deepEqual(effort("default"), first);
+      NodeAssert.equal(effort(JSON.stringify([secondary, "plain"])), undefined);
+      console.log(
+        "MCP model reasoning",
+        JSON.stringify({ default: first, analyst: other, plain: null }),
+      );
       let deviceResult = "access disabled";
       if (deviceAccess) {
         const inventory = JSON.parse(devices);

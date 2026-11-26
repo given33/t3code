@@ -39,14 +39,21 @@ describe("DSH wire translation", () => {
   });
   it("round-trips opaque grouped routes and exposes dependent reasoning options", async () => {
     const llm: LlmRuntime = {
-      listProviders: () => [{ id: "demo", name: "Demo" }],
+      listProviders: () => [
+        { id: "demo", name: "Demo" },
+        { id: "other", name: "Other" },
+      ],
       listModels: async () => [
         { id: "a", name: "First" },
         { id: "b", name: "Second" },
       ],
       resolveCallConfig: async (s) => s,
-      resolveModelInfo: async (_, model) =>
-        model === "a" ? { reasoning: { efforts: [{ id: "low", name: "Low" }] } } : {},
+      resolveModelInfo: async (provider, model) => {
+        if (provider === "other" && model === "b") throw new Error("unavailable");
+        if (provider === "other")
+          return { reasoning: { defaultEffort: "high", efforts: [{ id: "high", name: "High" }] } };
+        return model === "a" ? { reasoning: { efforts: [{ id: "low", name: "Low" }] } } : {};
+      },
     };
     let selected = { provider: "demo", model: "a" };
     const control = new AcpModelControl(llm, {
@@ -55,7 +62,17 @@ describe("DSH wire translation", () => {
         selected = value;
       },
     });
-    expect(await control.options()).toMatchObject([
+    const options = await control.options();
+    const routes = options[0]?._meta?.["t3.dsh.modelReasoning"];
+    expect(routes).toEqual({
+      '["demo","a"]': options[1],
+      '["demo","b"]': null,
+      '["other","a"]': expect.objectContaining({
+        currentValue: "high",
+        options: [{ value: "high", name: "High" }],
+      }),
+    });
+    expect(options).toMatchObject([
       { id: "model", currentValue: '["demo","a"]' },
       { id: "reasoning_effort", currentValue: "", options: [{ value: "" }, { value: "low" }] },
     ]);

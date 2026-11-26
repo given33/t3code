@@ -20,6 +20,7 @@ export async function offlineProfile(
   mock,
   extraPatch = [],
   modelOptions = {},
+  otherProviders = {},
 ) {
   const home = NodePath.join(root, bridgeEnabled ? "t3" : "official");
   const profile = NodePath.join(home, "profiles", "acp");
@@ -35,6 +36,7 @@ export async function offlineProfile(
           name: "@deepseek-ai/dsh-llm-pi-ai",
           config: {
             providers: {
+              ...otherProviders,
               [route.provider]: {
                 api: "openai-responses",
                 apiKeyEnv: "T3_OFFLINE_KEY",
@@ -66,6 +68,8 @@ export async function startMock({
   onModelInput,
   toolCalls,
   onTextStart,
+  afterDelta,
+  reasoningChunks = [],
   onToolStart,
   onModelFrame,
   expectToolFree = false,
@@ -129,6 +133,29 @@ export async function startMock({
         output: [],
       };
       send("response.created", { response });
+      const output = [];
+      if (replyWithText && reasoningChunks.length) {
+        const reasoning = { type: "reasoning", id: "reason_offline", summary: [] };
+        send("response.output_item.added", { output_index: 0, item: reasoning });
+        for (const delta of reasoningChunks) {
+          send("response.reasoning_summary_text.delta", {
+            item_id: reasoning.id,
+            output_index: 0,
+            summary_index: 0,
+            delta,
+          });
+          await afterDelta?.("agent_thought_chunk", delta);
+        }
+        reasoning.summary.push({ type: "summary_text", text: reasoningChunks.join("") });
+        send("response.reasoning_summary_part.done", {
+          item_id: reasoning.id,
+          output_index: 0,
+          summary_index: 0,
+          part: reasoning.summary[0],
+        });
+        send("response.output_item.done", { output_index: 0, item: reasoning });
+        output.push(reasoning);
+      }
       const item = replyWithText
         ? { type: "message", id: "msg_offline", role: "assistant", content: [] }
         : {
@@ -139,10 +166,10 @@ export async function startMock({
             arguments: "",
           };
       send("response.output_item.added", {
-        output_index: 0,
+        output_index: output.length,
         item: { ...item, status: "in_progress" },
       });
-      const fields = { item_id: item.id, output_index: 0 };
+      const fields = { item_id: item.id, output_index: output.length };
       if (replyWithText) {
         const content = { type: "output_text", text: "", annotations: [] };
         send("response.content_part.added", { ...fields, content_index: 0, part: content });
@@ -153,6 +180,7 @@ export async function startMock({
         const chunks = typeof textChunks === "function" ? textChunks(step) : textChunks;
         for (const delta of chunks) {
           send("response.output_text.delta", { ...fields, content_index: 0, delta });
+          await afterDelta?.("agent_message_chunk", delta);
           await NodeTimersPromises.setImmediate();
         }
         content.text = chunks.join("");
@@ -166,12 +194,12 @@ export async function startMock({
         send("response.function_call_arguments.done", { ...fields, arguments: item.arguments });
       }
       item.status = "completed";
-      send("response.output_item.done", { output_index: 0, item });
+      send("response.output_item.done", { output_index: output.length, item });
       send("response.completed", {
         response: {
           ...response,
           status: "completed",
-          output: [item],
+          output: [...output, item],
           usage: { input_tokens: 10, output_tokens: 6, total_tokens: 16 },
         },
       });

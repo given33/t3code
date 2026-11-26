@@ -1,12 +1,14 @@
 import * as NodeAssert from "node:assert/strict";
 import * as NodeEvents from "node:events";
 import { drive, withWorkspace } from "./drive.mjs";
-import { answer, offlineProfile, startMock } from "./mock-llm.mjs";
+import { offlineProfile, startMock } from "./mock-llm.mjs";
 
 await withWorkspace(async (cwd) => {
   const opened = Promise.withResolvers();
   const disconnected = Promise.withResolvers();
+  const textChunks = ["Offline stream ", "verified."];
   const mock = await startMock({
+    textChunks,
     textOnly: true,
     async onTextStart({ step, res }) {
       if (step !== 0) return;
@@ -64,11 +66,11 @@ await withWorkspace(async (cwd) => {
     const later = activity(trace.slice(next)).map((m) => m.params.update);
     NodeAssert.deepEqual(
       later.map((u) => [u.sessionUpdate, u.content?.text]),
-      [["agent_message_chunk", answer]],
+      textChunks.map((text) => ["agent_message_chunk", text]),
     );
     NodeAssert.deepEqual(mock.seen.get("Bearer offline-t3"), ["text", "text"]);
     console.log(
-      `SSE disconnected; post-cancel message/tool updates=${leaked.length}; next answer=${later[0].content.text}`,
+      `SSE disconnected; post-cancel message/tool updates=${leaked.length}; next answer=${later.map((u) => u.content.text).join("")}`,
     );
     if (mock.failure) throw mock.failure;
   } catch (error) {

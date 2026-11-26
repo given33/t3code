@@ -90,6 +90,12 @@ it.layer(nodeLayer)("DeepSeek Harness status", (it) => {
         );
         expect(snapshot.supportsConversationRollback).toBe(true);
         expect(snapshot.supportsTextGeneration).toBe(expected);
+        expect(snapshot.models[0]?.capabilities).toEqual(snapshot.models[1]?.capabilities);
+        if (scenario === "t3-bridge")
+          expect(snapshot.models[2]?.capabilities?.optionDescriptors).toMatchObject([
+            { id: "reasoning_effort", currentValue: "high", options: [{ id: "high" }] },
+          ]);
+        else expect(snapshot.models[2]?.capabilities?.optionDescriptors).toEqual([]);
         expect((yield* f.log).filter((e) => e.method === "session/prompt")).toHaveLength(0);
       }),
   );

@@ -38,6 +38,23 @@ export const modelOption = (config: ReadonlyArray<Acp.SessionConfigOption>) =>
   config.find((o) => o.type === "select" && o.id === "model" && o.category === "model");
 const empty = createModelCapabilities({ optionDescriptors: [] });
 
+const decodeReasoning = Schema.decodeUnknownOption(
+  Schema.Struct({
+    id: Schema.Literal("reasoning_effort"),
+    type: Schema.Literal("select"),
+    category: Schema.Literal("thought_level"),
+    name: Schema.String,
+    currentValue: Schema.String,
+    options: Schema.Array(
+      Schema.Struct({
+        value: Schema.String,
+        name: Schema.String,
+        description: Schema.optionalKey(Schema.String),
+      }),
+    ),
+  }),
+);
+
 const builtInProviderNames = new Map([
   ["deepseek-official", "DeepSeek API"],
   ["deepseek-account", "DeepSeek Account"],
@@ -70,6 +87,24 @@ export function dshCatalog(
     }),
   });
   const known = new Map(previousModels?.map((m) => [m.slug, m]));
+  const meta = model?._meta?.["t3.dsh.modelReasoning"];
+  const capabilitiesOf = (slug: string) => {
+    if (meta && typeof meta === "object" && !Array.isArray(meta) && Object.hasOwn(meta, slug)) {
+      const raw: unknown = Reflect.get(meta, slug);
+      if (raw === null) return empty;
+      const option = Option.getOrUndefined(decodeReasoning(raw));
+      if (option)
+        return createModelCapabilities({
+          optionDescriptors: acpProviderOptionDescriptors({
+            configOptions: [option],
+            modeState: undefined,
+          }),
+        });
+    }
+    if (slug === current && (meta === undefined || capabilities.optionDescriptors?.length))
+      return capabilities;
+    return known.get(slug)?.capabilities ?? empty;
+  };
   const providerNames = new Map<string, string>();
   const providerId = (slug: string) => modelRoute(slug, settings)?.[0].trim();
   for (const entry of settings.customModels) {
@@ -87,10 +122,9 @@ export function dshCatalog(
       slug: DSH_DEFAULT,
       name: "Harness default",
       isCustom: false,
-      capabilities:
-        current && current === defaultId
-          ? capabilities
-          : (known.get(DSH_DEFAULT)?.capabilities ?? empty),
+      capabilities: defaultId
+        ? capabilitiesOf(defaultId)
+        : (known.get(DSH_DEFAULT)?.capabilities ?? empty),
     },
   ];
   for (const item of model?.type === "select" ? model.options : []) {
@@ -114,10 +148,7 @@ export function dshCatalog(
         ...(group ? { subProvider: group } : {}),
         isCustom: false,
         ...(choice.value === defaultId ? { isDefault: true } : {}),
-        capabilities:
-          choice.value === current
-            ? capabilities
-            : (known.get(choice.value)?.capabilities ?? empty),
+        capabilities: capabilitiesOf(choice.value),
       });
     }
   }

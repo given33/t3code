@@ -14,6 +14,31 @@ const REASONING_CONFIG_ID = "reasoning_effort";
 // DSH reasoning effort ids are non-empty, so the empty opaque ACP value is a disjoint provider-default choice.
 const PROVIDER_DEFAULT_REASONING_VALUE = "";
 
+function reasoningOption(
+  info: Awaited<ReturnType<LlmRuntime["resolveModelInfo"]>>,
+  effort?: string,
+): SessionConfigOption | null {
+  const reasoning = info.reasoning;
+  if (!reasoning) return null;
+  return {
+    id: REASONING_CONFIG_ID,
+    name: "Reasoning effort",
+    category: "thought_level",
+    type: "select",
+    currentValue: effort ?? reasoning.defaultEffort ?? PROVIDER_DEFAULT_REASONING_VALUE,
+    options: [
+      ...(reasoning.defaultEffort === undefined
+        ? [{ value: PROVIDER_DEFAULT_REASONING_VALUE, name: "Provider default" }]
+        : []),
+      ...reasoning.efforts.map(({ id, name, description }) => ({
+        value: id,
+        name,
+        ...(description === undefined ? {} : { description }),
+      })),
+    ],
+  };
+}
+
 interface ModelChoice {
   selection: ModelSelection;
   value: SessionConfigValueId;
@@ -149,6 +174,40 @@ export class AcpModelControl {
       }
       group.options.unshift({ value: currentValue, name: resolved.model });
     }
+    // Adapter metadata can use a network-backed catalog. Bound optional discovery even
+    // when a third-party adapter ignores the signal. A timeout is unknown, not unsupported.
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(), 1000);
+    timer.unref?.();
+    const lookupSignal = signal ? AbortSignal.any([deadline.signal, signal]) : deadline.signal;
+    const stop = Promise.withResolvers<void>();
+    const onAbort = () => stop.resolve();
+    lookupSignal.addEventListener("abort", onAbort, { once: true });
+    const discovered = new Map<string, SessionConfigOption | null>();
+    try {
+      signal?.throwIfAborted();
+      const lookup = async (value: string, route: ModelSelection, lookupSignal?: AbortSignal) => {
+        try {
+          const info = await this.llm.resolveModelInfo(route.provider, route.model, lookupSignal);
+          if (!lookupSignal?.aborted)
+            discovered.set(value, reasoningOption(info, route.reasoningEffort));
+        } catch {
+          // A listed route may disappear between discovery and exact lookup.
+        }
+      };
+      const optional = Array.from(choices, ([value, route]) =>
+        value === currentValue ? undefined : lookup(value, route, lookupSignal),
+      );
+      await Promise.all([
+        routeAvailable ? lookup(currentValue, resolved, signal) : undefined,
+        Promise.race([stop.promise, Promise.all(optional)]),
+      ]);
+      signal?.throwIfAborted();
+    } finally {
+      clearTimeout(timer);
+      lookupSignal.removeEventListener("abort", onAbort);
+    }
+    const active = discovered.get(currentValue);
     const options: SessionConfigOption[] = [
       {
         id: MODEL_CONFIG_ID,
@@ -157,33 +216,10 @@ export class AcpModelControl {
         type: "select",
         currentValue,
         options: groups.filter((group) => group.options.length > 0),
+        _meta: { "t3.dsh.modelReasoning": Object.fromEntries(discovered) },
       },
+      ...(active ? [active] : []),
     ];
-    const info = routeAvailable
-      ? await this.llm.resolveModelInfo(resolved.provider, resolved.model, signal)
-      : undefined;
-    if (info?.reasoning !== undefined) {
-      options.push({
-        id: REASONING_CONFIG_ID,
-        name: "Reasoning effort",
-        category: "thought_level",
-        type: "select",
-        currentValue:
-          resolved.reasoningEffort === undefined
-            ? PROVIDER_DEFAULT_REASONING_VALUE
-            : String(resolved.reasoningEffort),
-        options: [
-          ...(info.reasoning.defaultEffort === undefined
-            ? [{ value: PROVIDER_DEFAULT_REASONING_VALUE, name: "Provider default" }]
-            : []),
-          ...info.reasoning.efforts.map((effort) => ({
-            value: String(effort.id),
-            name: effort.name,
-            ...(effort.description === undefined ? {} : { description: effort.description }),
-          })),
-        ],
-      });
-    }
     return { choices, options };
   }
 

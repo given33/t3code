@@ -26,6 +26,7 @@ export async function drive({
   mcpServers = [],
   allowPermission,
   onResponse,
+  onUpdate,
   run,
 }) {
   const label = bridgeEnabled ? "T3" : "official";
@@ -58,6 +59,7 @@ export async function drive({
           NodeAssert.equal(msg.jsonrpc, "2.0");
           if (msg.method) {
             trace.push(msg);
+            if (msg.method === "session/update") onUpdate?.(msg.params.update);
             if (msg.id !== undefined) {
               NodeAssert.equal(msg.method, "session/request_permission");
               const call = trace.findLast(
@@ -263,6 +265,38 @@ export function normalize(
       "t3.dsh.promptSteering": true,
       "t3.dsh.toolFreeSession": true,
     });
+    for (const msg of copy) {
+      for (const option of msg.result?.configOptions ?? []) {
+        if (option.id !== "model") continue;
+        const routes = option._meta?.["t3.dsh.modelReasoning"];
+        NodeAssert.ok(routes && typeof routes === "object");
+        const active = msg.result.configOptions.find((o) => o.id === "reasoning_effort");
+        if (Object.hasOwn(routes, option.currentValue))
+          NodeAssert.deepEqual(routes[option.currentValue], active ?? null);
+        delete option._meta["t3.dsh.modelReasoning"];
+        if (!Object.keys(option._meta).length) delete option._meta;
+      }
+    }
+    // Compare exact ordered content across the official bridge's commit and T3's live fragments.
+    for (let i = copy.length - 1; i > 0; i--) {
+      const frame = copy[i],
+        previous = copy[i - 1],
+        update = frame.params?.update,
+        prior = previous.params?.update;
+      if (
+        frame.method === "session/update" &&
+        previous.method === frame.method &&
+        frame.params.sessionId === previous.params.sessionId &&
+        ["agent_message_chunk", "agent_thought_chunk"].includes(update?.sessionUpdate) &&
+        prior?.sessionUpdate === update.sessionUpdate &&
+        prior.messageId === update.messageId &&
+        update.content?.type === "text" &&
+        prior.content?.type === "text"
+      ) {
+        prior.content.text += update.content.text;
+        copy.splice(i, 1);
+      }
+    }
     delete init._meta;
   }
   delete init.agentInfo;

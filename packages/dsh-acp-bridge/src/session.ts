@@ -10,6 +10,8 @@ import type {
   SessionModeState,
   StopReason,
   Agent,
+  AssistantStreamFrame,
+  SessionUpdate,
   AgentHandle,
   AgentOptions,
   UserMessage,
@@ -25,7 +27,7 @@ import { AcpContentError, admitAcpPrompt } from "./content.ts";
 import { turnEndToStopReason } from "./codec.ts";
 import { mountAcpMcpServers } from "./mcp.ts";
 import { AcpModelControl } from "./model-control.ts";
-import { assistantUpdates, SessionActivityUpdates } from "./updates.ts";
+import { AssistantStream, assistantUpdates, SessionActivityUpdates } from "./updates.ts";
 
 /** Inputs shared by fresh and resumed ACP session construction. */
 interface AcpSessionBuildOptions {
@@ -93,6 +95,7 @@ export class AcpSession {
   private readonly modelControl: AcpModelControl;
   private readonly activityUpdates: SessionActivityUpdates;
   private lastModeId: string | undefined;
+  private stream: AssistantStream | undefined;
   private outputTail = Promise.resolve();
   private advertisedSkills = new Set<string>();
   private warnedMissingSteer = false;
@@ -484,6 +487,44 @@ export class AcpSession {
     if (inflight === undefined) this.agent.cancel({ kind: "user" });
   }
 
+  onAssistantStream(frame: AssistantStreamFrame): void {
+    if (frame.type === "start") {
+      this.stream = new AssistantStream(frame);
+      return;
+    }
+    const stream = this.stream;
+    if (!stream || stream.start.attemptId !== frame.attemptId) return;
+    if (frame.type === "end") {
+      this.stream = undefined;
+      return;
+    }
+    const update = stream.chunk(frame);
+    if (update) this.enqueueAssistant(stream.start.turn, () => [update]);
+  }
+
+  private enqueueAssistant(
+    turn: number,
+    project: () => SessionUpdate[] | Promise<SessionUpdate[]>,
+  ): void {
+    const inflight = this.inflight?.turn === turn ? this.inflight : undefined;
+    const signal = this.inflight?.admissionController.signal;
+    this.outputTail = this.outputTail
+      .then(async () => {
+        if (this.closing || signal?.aborted) return;
+        for (const update of await project()) {
+          if (this.closing || signal?.aborted) return;
+          await this.notify({ sessionId: this.agent.session.id, update });
+        }
+      })
+      .catch((error: unknown) => {
+        const failure = error instanceof Error ? error : new Error(String(error));
+        if (inflight) inflight.outputError ??= failure;
+        this.ctx.logger.warn(
+          `acp: assistant output conversion failed: ${dshRuntime().llm.errorChain(error)}`,
+        );
+      });
+  }
+
   /** Process one durable event and enqueue its standard ACP projections. */
   onSessionEvent(session: Session, event: SessionEvent): void {
     if (event.type === "turn/start" && this.inflight?.turn !== undefined) {
@@ -508,23 +549,15 @@ export class AcpSession {
           }
         });
       } else if (event.type === "assistant/message") {
-        const inflight = this.inflight?.turn === event.data.turn ? this.inflight : undefined;
-        const signal = this.inflight?.admissionController.signal;
-        const previous = this.outputTail;
-        const delivery = previous.then(async () => {
-          if (this.closing || signal?.aborted) return;
-          for (const update of await assistantUpdates(this.ctx, session, event)) {
-            if (this.closing || signal?.aborted) return;
-            await this.notify({ sessionId: this.agent.session.id, update });
-          }
-        });
-        this.outputTail = delivery.catch((error: unknown) => {
-          const failure = error as Error;
-          if (inflight !== undefined) inflight.outputError ??= failure;
-          this.ctx.logger.warn(
-            `acp: assistant output conversion failed: ${dshRuntime().llm.errorChain(error)}`,
-          );
-        });
+        const stream = this.stream;
+        const match =
+          stream && stream.start.turn === event.data.turn && stream.start.step === event.data.step
+            ? stream
+            : undefined;
+        if (match) this.stream = undefined;
+        this.enqueueAssistant(event.data.turn, () =>
+          assistantUpdates(this.ctx, session, event, match),
+        );
       } else if (
         event.type === "compaction/start" ||
         event.type === "compaction/summary" ||

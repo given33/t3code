@@ -122,6 +122,7 @@ const threads = {
   plan: dshThread("plan"),
   tools: dshThread("tools"),
   usage: dshThread("usage"),
+  orchestration: dshThread("orchestration"),
 };
 
 async function openThread(thread: ReturnType<typeof dshThread>) {
@@ -303,4 +304,103 @@ it("shows context used and capacity after DSH reports usage", async () => {
   });
   await expect.element(row).toBeVisible();
   await expect.element(row.getByText("32k / 128k", { exact: true })).toBeVisible();
+});
+
+it("renders DSH orchestration capabilities and folds its delegate tool into the native child card", async () => {
+  const thread = threads.orchestration;
+  await using _app = await openThread(thread);
+  const taskId = "dsh-task",
+    title = "Inspect the DSH catalog";
+  const emit = (id: string, ordinal: number, fields: Record<string, unknown>) =>
+    emitThreadEvent(thread.id, {
+      type: "turn-item.updated",
+      payload: decodeItem({
+        ...turnItemBase(thread.id, thread.runs[0]!.id, id, ordinal),
+        providerThreadId: thread.providerThreads[0].id,
+        ...fields,
+      }),
+    });
+  const tool = (name: string) => ({
+    toolName: `t3-code.${name}`,
+    type: "dynamic_tool",
+    title: null,
+    nativeItemRef: { driver: "dsh", nativeId: `call_${name}`, strength: "strong" },
+  });
+  await emit("caps", 21000004, {
+    ...tool("orchestrator_capabilities"),
+    input: { search: "dsh" },
+    output: [
+      {
+        type: "content",
+        content: {
+          type: "text",
+          text: JSON.stringify({
+            parentThreadId: thread.id,
+            inheritedProviderInstanceId: "dsh",
+            inheritedModel: model.model,
+            inheritedOptions: [{ id: "reasoning_effort", value: "max" }],
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            providers: [
+              {
+                providerInstanceId: "dsh",
+                driverKind: "dsh",
+                displayName: "DeepSeek Harness",
+                models: [{ id: "default", label: "Harness default" }],
+                canRunChildTask: true,
+                canRunCrossProviderChildTask: true,
+                constraints: [],
+              },
+            ],
+            features: {
+              appOwnedSubagents: true,
+              asyncPolling: true,
+              cancellation: true,
+              batchThreadCreation: true,
+              threadManagement: true,
+              incrementalThreadRead: true,
+              scheduledTasks: true,
+              maxBatchThreads: 20,
+            },
+          }),
+        },
+      },
+    ],
+  });
+  await emit("delegate", 21000287, {
+    ...tool("delegate_task"),
+    input: {
+      task: title,
+      title,
+      role: "implementation",
+      mode: "async",
+      isolation: "shared",
+      target: {
+        providerInstanceId: "codex",
+        model: "gpt-6.2-astra",
+        options: [{ id: "reasoningEffort", value: "xhigh" }],
+      },
+    },
+    output: { taskId },
+  });
+  await emit("child", 21000288, {
+    type: "subagent",
+    status: "interrupted",
+    subagentId: taskId,
+    title,
+    origin: "app_owned",
+    driver: "codex",
+    providerInstanceId: "codex",
+    childThreadId: "dsh-child",
+    prompt: `Act as the implementation sub-agent for this task.\n\n${title}`,
+    result: "Interrupted",
+  });
+  await page.getByRole("button", { name: /^Worked for/ }).click();
+  await expect
+    .element(page.getByText("Got orchestration capabilities", { exact: false }).first())
+    .toBeVisible();
+  await expect.element(page.getByRole("button", { name: `Open ${title}` })).toBeVisible();
+  await expect
+    .element(page.getByText(/t3-code\.(orchestrator_capabilities|delegate_task)/))
+    .not.toBeInTheDocument();
 });

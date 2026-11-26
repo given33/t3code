@@ -11,6 +11,15 @@ DSH 实测基线为 `feat/dsh-plugins` 的 `0fc800d0`（T24）及 T25 验证脚�
 | C 界面       | 部分等价                   | Web Chromium 验证原生聊天与设置入口，Mobile 单测覆盖模型、权限和搜索。iOS/Android 真机交互尚待验证。                     |
 | D 交接与编排 | MCP 委派等价，整体部分等价 | Fork 与跨 DSH 实例交接均在目标模型入口核对历史标记，MCP 委派验证父子结果回传。DSH 原生子代理与后台等待仍受上游限制。     |
 
+## T27 隔离复核（2026-11-26）
+
+基线为 `2cc0dd2e`，运行时为 Windows 安装包 `0.2.3-alpha.2`。测试使用临时 DSH profile、随机回环端口、本地 Responses 模型和重建的服务端。线上八个模型属于用户的实际 profile，本次验证覆盖隔离目录的完整传递链路。
+
+- **模型目录。** `resolveModelInfo` 委托给当前适配器。安装包中 `dsh-llm-pi-ai/lib/index.js:2070` 从本地快照读模型，`dsh-llm-deepseek/lib/index.js:2277` 会等待连接，Account/API 可以使用网络支持的目录缓存。桥并发解析列出的路线，为额外查询设置 1 秒共同期限，区分未获结果与明确无推理能力。官方桥继续使用当前选项与已有快照。隔离的 `orchestrator_capabilities` 返回两个厂商、三条路线和 `default`。默认路线及别名都提供 `_t3/empty`、`low`，另一条路线提供 `_t3/empty`、`high`、`max`，普通模型没有 effort 控件。切换活跃模型后通过单测核对别名仍跟随原默认路线。[隔离 MCP 实测](../packages/dsh-acp-bridge/scripts/audit-server-mcp.mjs)
+- **流式输出。** 安装包在 `dsh-agent/src/runtime-types.ts:400` 声明 `agent/assistant-stream`，`dsh-agent-loop/src/agent.ts:476` 发布帧，`assistant-stream.ts` 在同步提交最终消息后发布结束帧。T3 桥按 attempt、turn、step 对应已输出前缀，提交时补齐剩余块和用量。若提供方提交的文本比已显示的短，或改写了已显示的内容，桥会记录警告，保留已显示的内容，并继续上报用量。测试模型收到每片 ACP 回执才发送下一片，独立插件记录持久消息。同一消息的 2 个思考片段与 3 个正文片段全部早于提交，拼接分别与持久消息逐字相同。取消后的更新数为 0，steer 和多步工具测试只观察到一次开轮计划重置。ACP 的追加式协议无法撤回失败尝试已显示的前缀，后续尝试使用独立 ID。[流式实测](../packages/dsh-acp-bridge/scripts/streaming.mjs)
+- **编排时间线。** 按实库 `dynamic_tool` 与 `app_owned` 子任务的字段和关联关系构造脱敏用例。Chromium 渲染 `Got orchestration capabilities`，同一委派显示可打开的子代理卡片。隔离 MCP 实测另行验证父任务收到子任务结果。[浏览器用例](../apps/web/src/components/ChatView.dshNative.browser.test.tsx)
+- **生命周期。** `dsh-tool-todo` 的计划投影在 `turn/start` 清空，连续模型步骤与 steer 沿用当前 turn。启动 overlay 使用每次独立的临时目录和参数数组，握手或启动成功后即释放，作用域仍负责失败清理。修复前 Windows 强制终止隔离服务会遗留活动连接的 overlay，修复后两次服务实测结束时专用 TEMP 中的 overlay 目录为 0。握手完成前强制终止仍可能残留。ACP 按会话记录编排指令投递，运行时重建会清除投递记录，成功压缩会标记下次重投。模型切换后依新选项校验 effort。[DSH 驱动回归](../packages/provider-dsh/src/server/driver.test.ts)
+
 ## 全部内建驱动
 
 注册表共有 12 项。ACP Registry 是按实例选择外部 ACP agent 的通用驱动。OpenCode 的不同运行时由同一入口选择。下表给出四个重点参考以外的覆盖面，后续五列矩阵逐能力比较。[builtInDrivers.ts:35](../apps/server/src/provider/builtInDrivers.ts#L35)

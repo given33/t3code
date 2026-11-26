@@ -77,7 +77,7 @@ interface EventData {
   "sandbox/mode": unknown;
   "approval/policy": unknown;
   "turn/start": { turn: number };
-  "assistant/message": { turn: number; message: UserMessage; usage?: unknown };
+  "assistant/message": { turn: number; step?: number; message: UserMessage; usage?: unknown };
   "tool/call": { callId: string; name: string; arguments: string };
   "todo/write": { todos: { content: string; status: string }[] };
   "tool/result": {
@@ -196,7 +196,17 @@ interface Services {
     processPath(path: unknown): string;
   };
 }
+type AssistantStreamChunk =
+  | { type: "text-delta" | "reasoning-delta"; index: number; text: string }
+  | { type: "block-start" | "tool-call-delta"; index: number }
+  | { type: "block-end"; index: number; block: ContentBlock }
+  | { type: "finish" | "usage" };
+export type AssistantStreamFrame =
+  | { type: "start"; attemptId: string; turn: number; step: number }
+  | { type: "chunk"; attemptId: string; index: number; chunk: AssistantStreamChunk }
+  | { type: "end"; attemptId: string };
 interface Events {
+  "agent/assistant-stream": [{ agent: Agent; frame: AssistantStreamFrame }];
   "commands/change": [];
   "session/event": [Session, SessionEvent];
   "agent/inbox/claimed": [{ agent: Agent; message: UserMessage; turn: number }];
@@ -248,6 +258,7 @@ interface SelectOption {
   description?: string;
 }
 export interface SessionConfigOption {
+  _meta?: Record<string, unknown>;
   id: string;
   type: "select";
   category: "model" | "thought_level";

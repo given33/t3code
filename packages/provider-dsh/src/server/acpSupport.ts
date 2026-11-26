@@ -16,6 +16,8 @@ import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Exit from "effect/Exit";
+import * as Scope from "effect/Scope";
 import * as Path from "effect/Path";
 import { AcpRequestError } from "effect-acp/errors";
 import * as Layer from "effect/Layer";
@@ -158,7 +160,10 @@ export const makeDshAcpRuntime = Effect.fn("Dsh.makeAcpRuntime")(function* ({
   isolatedHome,
   ...options
 }: DshAcpRuntimeInput) {
-  const launch = yield* prepareDshLaunch(settings, environment, probePatchPath, isolatedHome);
+  const bootstrap = yield* Scope.fork(yield* Effect.scope);
+  const launch = yield* prepareDshLaunch(settings, environment, probePatchPath, isolatedHome).pipe(
+    Scope.provide(bootstrap),
+  );
   const context = yield* Layer.build(
     AcpSessionRuntime.layer({
       ...options,
@@ -170,7 +175,16 @@ export const makeDshAcpRuntime = Effect.fn("Dsh.makeAcpRuntime")(function* ({
       },
     }),
   );
-  return yield* Effect.service(AcpSessionRuntime.AcpSessionRuntime).pipe(Effect.provide(context));
+  const runtime = yield* Effect.service(AcpSessionRuntime.AcpSessionRuntime).pipe(
+    Effect.provide(context),
+  );
+  // The CLI has consumed --patch by the handshake. Windows forced server shutdown cannot run scope finalizers.
+  const consumed = Scope.close(bootstrap, Exit.void);
+  return {
+    ...runtime,
+    initialize: () => runtime.initialize().pipe(Effect.tap(() => consumed)),
+    start: () => runtime.start().pipe(Effect.tap(() => consumed)),
+  };
 });
 
 export const startDshToolFreeSession = Effect.fn("Dsh.startToolFreeSession")(function* (

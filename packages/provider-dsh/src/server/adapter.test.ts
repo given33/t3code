@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { ProviderInstanceId } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import type * as FileSystem from "effect/FileSystem";
+import * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
@@ -105,14 +105,15 @@ it.layer(nodeLayer)("DeepSeek ACP adapter", (it) => {
       Effect.gen(function* () {
         const f = yield* fixture();
         const instanceId = ProviderInstanceId.make("sample");
+        const settings = {
+          ...f.settings,
+          customProviderId: "beta",
+          customProviderBaseUrl: "https://example.test/v1",
+          customModels: ["sample"],
+        };
         const flavor = dshFlavor({
           ...f,
-          settings: {
-            ...f.settings,
-            customProviderId: "beta",
-            customProviderBaseUrl: "https://example.test/v1",
-            customModels: ["sample"],
-          },
+          settings,
           services: yield* Effect.context<FileSystem.FileSystem | Path.Path>(),
           instanceId,
           selfInvocation: { command: "node", entrypoint: undefined },
@@ -135,6 +136,7 @@ it.layer(nodeLayer)("DeepSeek ACP adapter", (it) => {
         });
         const runtime = yield* makeDshAcpRuntime({
           ...f,
+          settings,
           cwd: f.directory,
           clientInfo: { name: "test", version: "1" },
           mcpServers: [],
@@ -143,6 +145,9 @@ it.layer(nodeLayer)("DeepSeek ACP adapter", (it) => {
           ],
         });
         const startResult = yield* runtime.start();
+        const overlay = (yield* f.log).find((entry) => entry.method === "launch")?.patchPath;
+        expect(overlay).toBeDefined();
+        expect(yield* (yield* FileSystem.FileSystem).exists(overlay!)).toBe(false);
         const apply = flavor.applyModelSelection;
         if (!apply) throw new Error("missing model selection");
         const select = (model: string, effort?: string) =>

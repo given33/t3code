@@ -103,3 +103,36 @@ it("uses fresh ACP names and keeps previous route labels only for groups still r
     ['["pixel","extra"]', "Pixel Labs"],
   ]);
 });
+
+it("keeps default attached to its profile route across model switches and clears unsupported capabilities", () => {
+  const settings = decodeDshSettings({});
+  const model = modelConfig([choice(official), choice(account), choice(pixel)])[0]!;
+  const effort = (value: string) =>
+    ({
+      id: "reasoning_effort",
+      type: "select",
+      category: "thought_level",
+      name: "Reasoning",
+      currentValue: value,
+      options: [{ value, name: value }],
+    }) as const;
+  const capabilities = { [official]: effort("low"), [account]: effort("high"), [pixel]: null };
+  const config = (currentValue: string) => [
+    {
+      ...model,
+      type: "select" as const,
+      options: [choice(official), choice(account), choice(pixel)],
+      currentValue,
+      _meta: { "t3.dsh.modelReasoning": capabilities },
+    },
+  ];
+  const initial = dshCatalog(settings, config(official));
+  const switched = dshCatalog(settings, config(account), initial.models);
+  expect(
+    switched.models.map((m) => m.capabilities?.optionDescriptors?.map((o) => o.currentValue)),
+  ).toEqual([["low"], ["low"], ["high"], []]);
+  const oldBridge = dshCatalog(settings, [model, effort("low")]);
+  expect(oldBridge.models.map((m) => m.capabilities?.optionDescriptors?.length)).toEqual([
+    1, 1, 0, 0,
+  ]);
+});

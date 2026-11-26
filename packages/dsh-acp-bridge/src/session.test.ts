@@ -488,3 +488,149 @@ it("rejects concurrent plain text with invalidParams and warns once when agent.s
   release.resolve();
   await expect(first).resolves.toEqual({ stopReason: "end_turn" });
 });
+
+it("delivers ordered live thought and text, reconciles a partial block, keeps usage and falls back without a stream", async () => {
+  const { session, agent, notify } = await setup({
+    tokenMeter: { measure: () => ({ totalTokens: 3 }) },
+  });
+  agent.session.requestContext = () => ({ contextWindow: 100 });
+  const attemptId = "test:1";
+  session.onAssistantStream({ type: "start", attemptId, turn: 1, step: 1 });
+  const thought = {
+    type: "chunk",
+    attemptId,
+    index: 0,
+    chunk: { type: "reasoning-delta", index: 0, text: "why" },
+  } as const;
+  session.onAssistantStream(thought);
+  session.onAssistantStream(thought);
+  session.onAssistantStream({
+    type: "chunk",
+    attemptId,
+    index: 1,
+    chunk: { type: "block-end", index: 0, block: { type: "reasoning", text: "why" } },
+  });
+  session.onAssistantStream({
+    type: "chunk",
+    attemptId,
+    index: 2,
+    chunk: { type: "text-delta", index: 1, text: "par" },
+  });
+  await session.drainUpdates();
+  const update = () => notify.mock.calls.map(([{ update }]) => update);
+  expect(update()).toMatchObject([
+    { sessionUpdate: "agent_thought_chunk", content: { text: "why" } },
+    { sessionUpdate: "agent_message_chunk", content: { text: "par" } },
+  ]);
+  session.onSessionEvent(agent.session, {
+    type: "assistant/message",
+    data: {
+      turn: 1,
+      step: 1,
+      usage: {},
+      message: {
+        id: "durable",
+        content: [
+          { type: "reasoning", text: "why" },
+          { type: "text", text: "partial" },
+        ],
+      },
+    },
+  });
+  session.onAssistantStream({ type: "end", attemptId });
+  session.onSessionEvent(agent.session, {
+    type: "assistant/message",
+    data: { turn: 1, step: 2, message: { id: "next", content: [{ type: "text", text: "next" }] } },
+  });
+  await session.drainUpdates();
+  expect(update().slice(2)).toMatchObject([
+    { sessionUpdate: "agent_message_chunk", messageId: attemptId, content: { text: "tial" } },
+    { sessionUpdate: "usage_update", used: 3, size: 100 },
+    { sessionUpdate: "agent_message_chunk", messageId: "next", content: { text: "next" } },
+  ]);
+});
+
+it("flushes split reasoning breaks before more text and drops the trimmed trailing break", async () => {
+  const { session, agent, notify, warn } = await setup();
+  warn.mockClear();
+  const attemptId = "test:1";
+  const deltas = ["first", "\n", "\n", "second", "\n", "\n"];
+  const block = { type: "reasoning", text: "first\n\nsecond" } as const;
+  session.onAssistantStream({ type: "start", attemptId, turn: 1, step: 1 });
+  for (const [index, text] of deltas.entries()) {
+    session.onAssistantStream({
+      type: "chunk",
+      attemptId,
+      index,
+      chunk: { type: "reasoning-delta", index: 0, text },
+    });
+  }
+  await session.drainUpdates();
+  expect(notify.mock.calls.map(([{ update }]) => update)).toMatchObject([
+    { sessionUpdate: "agent_thought_chunk", content: { text: "first" } },
+    { sessionUpdate: "agent_thought_chunk", content: { text: "\n\nsecond" } },
+  ]);
+  session.onAssistantStream({
+    type: "chunk",
+    attemptId,
+    index: deltas.length,
+    chunk: { type: "block-end", index: 0, block },
+  });
+  session.onSessionEvent(agent.session, {
+    type: "assistant/message",
+    data: { turn: 1, step: 1, message: { id: "durable", content: [block] } },
+  });
+  await session.drainUpdates();
+  expect(notify).toHaveBeenCalledTimes(2);
+  expect(warn).not.toHaveBeenCalled();
+});
+
+it.each([
+  { committed: "Hello", warning: "shorter" },
+  { committed: "Hello, world!", warning: "differs" },
+])(
+  "keeps the streamed text, usage and successful turn when the commit is '$committed'",
+  async ({ committed, warning }) => {
+    const { session, agent, notify, warn } = await setup({
+      tokenMeter: { measure: () => ({ totalTokens: 3 }) },
+    });
+    agent.session.requestContext = () => ({ contextWindow: 100 });
+    const attemptId = "test:1";
+    const streamed = "Hello world";
+    vi.mocked(agent.followup).mockImplementation((message) => {
+      session.onInboxClaimed(message, 1);
+      session.onAssistantStream({ type: "start", attemptId, turn: 1, step: 1 });
+      session.onAssistantStream({
+        type: "chunk",
+        attemptId,
+        index: 0,
+        chunk: { type: "text-delta", index: 0, text: streamed },
+      });
+      session.onSessionEvent(agent.session, {
+        type: "assistant/message",
+        data: {
+          turn: 1,
+          step: 1,
+          usage: {},
+          message: { id: "durable", content: [{ type: "text", text: committed }] },
+        },
+      });
+      session.onSessionEvent(agent.session, {
+        type: "turn/end",
+        data: { turn: 1, reason: { kind: "completed" } },
+      });
+    });
+    await expect(
+      session.prompt({ sessionId: "test", prompt: [{ type: "text", text: "test" }] }, false),
+    ).resolves.toEqual({ stopReason: "end_turn" });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(warning));
+    expect(notify.mock.calls.map(([{ update }]) => update)).toEqual([
+      {
+        sessionUpdate: "agent_message_chunk",
+        messageId: attemptId,
+        content: { type: "text", text: streamed },
+      },
+      { sessionUpdate: "usage_update", used: 3, size: 100 },
+    ]);
+  },
+);
