@@ -14,6 +14,7 @@
     "test:tools": "node scripts/tools.mjs",
     "test:modes": "node scripts/modes.mjs",
     "test:commands": "node scripts/commands.mjs",
+    "test:handoff-modes": "node scripts/handoff-and-modes.mjs",
     "test:rewind": "node scripts/rewind.mjs",
     "test:steer": "node scripts/steer.mjs",
     "test:text-generation": "node scripts/text-generation.mjs",

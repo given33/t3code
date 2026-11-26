@@ -1,4 +1,4 @@
-// Observe only ACP identity and adapter terminals in the isolated server. Never serialize
+// Observe ACP identities, modes and adapter terminals in the isolated server. Never serialize
 // session/new arguments (they include MCP credentials) or prompt contents.
 import * as NodeFS from "node:fs";
 import * as NodeInspectorPromises from "node:inspector/promises";
@@ -28,6 +28,20 @@ const points = new Map([
     'event.type === "turn.terminal" && globalThis.t22Terminal(event)',
   ],
 ]);
+if (process.env.T25_TRACE_MODES) {
+  globalThis.t25Prompt = (pid, sessionId, client) =>
+    record({ type: "session/prompt", pid, sessionId, client });
+  points.set(
+    'fiber: yield* runLoggedRequest("session/prompt", requestPayload,',
+    "globalThis.t25Prompt(Number(child.pid), requestPayload.sessionId, options.clientInfo.name)",
+  );
+  globalThis.t25ModeWrite = ({ sessionId, modeId }) =>
+    record({ type: "session/set_mode", sessionId, modeId });
+  points.set(
+    'yield* runLoggedSessionWrite("session/set_mode", payload,',
+    "globalThis.t25ModeWrite(payload)",
+  );
+}
 for (const name of NodeFS.readdirSync(dist).filter((name) => /^runtimeLayer-.*\.mjs$/.test(name))) {
   const file = NodePath.join(dist, name);
   const lines = NodeFS.readFileSync(file, "utf8").split("\n");
