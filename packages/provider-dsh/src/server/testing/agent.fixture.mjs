@@ -67,6 +67,13 @@ for await (const line of NodeReadline.createInterface({ input: process.stdin }))
             : [],
         ),
       }),
+    ...(method === "session/prompt" &&
+      process.env.DSH_TEST_PROMPT_MARKER && {
+        promptContainsMarker: params.prompt.some(
+          (block) =>
+            block.type === "text" && block.text.includes(process.env.DSH_TEST_PROMPT_MARKER),
+        ),
+      }),
     ...(params?.cwd && { cwd: params.cwd }),
     ...(params?.cursor && { cursor: params.cursor }),
     ...(params?.mcpServers && { mcpTypes: params.mcpServers.map((s) => s.type) }),
@@ -176,14 +183,17 @@ for await (const line of NodeReadline.createInterface({ input: process.stdin }))
       send({ id, result: {} });
       break;
     case "session/prompt":
-      if (process.env.DSH_TEST_CASE === "t3-bridge-blank-title") {
+      if (process.env.DSH_TEST_CASE === "t3-bridge-blank-title" || process.env.DSH_TEST_REPLY) {
         send({
           method: "session/update",
           params: {
             sessionId: params.sessionId,
             update: {
               sessionUpdate: "agent_message_chunk",
-              content: { type: "text", text: JSON.stringify({ title: '""' }) },
+              content: {
+                type: "text",
+                text: process.env.DSH_TEST_REPLY ?? JSON.stringify({ title: '""' }),
+              },
             },
           },
         });
@@ -204,7 +214,7 @@ for await (const line of NodeReadline.createInterface({ input: process.stdin }))
       if (params.prompt[0]?.text === "wait") pending = id;
       else if (params.prompt[0]?.text === "limit")
         send({ id, error: { code: -32000, message: "rate_limit: HTTP 429" } });
-      else send({ id, result: { stopReason: "end_turn" } });
+      else send({ id, result: { stopReason: process.env.DSH_TEST_STOP_REASON ?? "end_turn" } });
       break;
     case "session/cancel":
       if (pending !== undefined) {

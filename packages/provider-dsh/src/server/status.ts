@@ -125,8 +125,8 @@ const probeConfiguration = Effect.fn("Dsh.probeConfiguration")(function* (
   const started = yield* runtime.start();
   const config = yield* runtime.getConfigOptions;
   if (capabilities?.close != null) yield* runtime.closeSession(started.sessionId);
-  // Exercise the same isolated home, bridge and empty tool restriction as generation.
-  // Discovery never sends a billable model prompt.
+  // Probe the tool-free session and its selected model for all prompt-only operations.
+  // Checkout investigation is a separate capability. Discovery sends no model prompt.
   const supportsTextGeneration =
     supportsDshToolFreeSession(initialized) &&
     (yield* Effect.gen(function* () {

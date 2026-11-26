@@ -86,7 +86,7 @@ export async function startMock({
       const body = JSON.parse(Buffer.concat(parts).toString());
       NodeAssert.equal(body.model, modelId);
       NodeAssert.equal(body.stream, true);
-      onModelInput?.(body.input);
+      onModelInput?.(body.input, body.tools);
       const requests = seen.get(req.headers.authorization);
       NodeAssert.ok(requests, "Expected an isolated offline credential");
       const step = requests.length;
@@ -150,11 +150,12 @@ export async function startMock({
           await onTextStart({ step, res });
           if (res.destroyed) return;
         }
-        for (const delta of textChunks) {
+        const chunks = typeof textChunks === "function" ? textChunks(step) : textChunks;
+        for (const delta of chunks) {
           send("response.output_text.delta", { ...fields, content_index: 0, delta });
           await NodeTimersPromises.setImmediate();
         }
-        content.text = textChunks.join("");
+        content.text = chunks.join("");
         item.content.push(content);
         send("response.output_text.done", { ...fields, content_index: 0, text: content.text });
         send("response.content_part.done", { ...fields, content_index: 0, part: content });
