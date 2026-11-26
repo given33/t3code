@@ -44,6 +44,24 @@ it("lists a favorite the provider no longer reports so it can be unstarred", asy
   expect(onToggleFavorite).toHaveBeenCalledWith("retired-model");
 });
 
+it("accepts the provider/model route shown in the DSH custom model field", async () => {
+  const onChange = vi.fn(async () => true);
+  await using screen = await render(
+    section({
+      instanceId: ProviderInstanceId.make("dsh"),
+      driverKind: ProviderDriverKind.make("dsh"),
+      onChange,
+    }),
+  );
+  await screen.getByRole("button", { name: "Add custom model" }).click();
+  const route = "deepseek-official/deepseek-v4-flash";
+  const input = screen.getByRole("textbox");
+  await expect.element(input).toHaveAttribute("placeholder", route);
+  await input.fill(route);
+  await screen.getByRole("button", { name: "Add", exact: true }).click();
+  expect(onChange).toHaveBeenCalledWith([{ slug: route, name: route, capabilities: null }]);
+});
+
 it("keeps custom model drafts until they save, so a failed save can be retried", async () => {
   const saves: Array<(saved: boolean) => void> = [];
   const onChange = () => new Promise<boolean>((resolve) => saves.push(resolve));

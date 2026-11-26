@@ -149,6 +149,26 @@ describe("customModelEditor.logic", () => {
     ).toMatchObject(capabilities.optionDescriptors![0]!);
   });
 
+  it("saves DSH's reasoning preset with its ACP option id", () => {
+    const presets = DESCRIPTOR_PRESETS_BY_KIND[ProviderDriverKind.make("dsh")] ?? [];
+    const definition = definitionFromDraft(
+      draft({ descriptors: presets.map(descriptorFromPreset) }),
+    );
+    expect(definition.capabilities?.optionDescriptors).toMatchObject([
+      {
+        id: "reasoning_effort",
+        type: "select",
+        currentValue: "medium",
+        options: [
+          { id: "low" },
+          { id: "medium", isDefault: true },
+          { id: "high" },
+          { id: "xhigh" },
+        ],
+      },
+    ]);
+  });
+
   it("rejects duplicate ids, blank ids, and selects without choices", () => {
     const select = (id: string, choices: Array<{ id: string }>) => ({
       key: id,

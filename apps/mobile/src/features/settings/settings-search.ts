@@ -132,6 +132,8 @@ const SETTINGS_SEARCH_TERMS = {
     "claude",
     "cursor",
     "opencode",
+    "dsh",
+    "deepseek",
     msg("sign in", { $context: "settings search keyword" }),
     msg("login", { $context: "settings search keyword" }),
     msg("auth", { $context: "settings search keyword" }),

@@ -14,6 +14,8 @@ import type {
   ServerConfig as T3ServerConfig,
 } from "@t3tools/contracts";
 import {
+  PROVIDER_DISPLAY_NAMES,
+  ProviderDriverKind,
   isManagedDriverAllowed,
   isProviderDriverKind,
   resolveProjectProviderInstanceEnabled,
@@ -83,6 +85,9 @@ function providerDisplayLabel(provider: {
   if (provider.displayName) return provider.displayName;
   if (provider.driver === "codex") return "Codex";
   if (provider.driver === "claudeAgent") return "Claude";
+  if (provider.driver === "dsh") {
+    return PROVIDER_DISPLAY_NAMES[ProviderDriverKind.make("dsh")] ?? provider.instanceId;
+  }
   if (provider.driver === "pi") return "Pi";
   return provider.instanceId;
 }
@@ -496,6 +501,9 @@ export function buildModelOptions(
         providerLabel,
         providerDriver,
         providerBadge: providerBadgeFor(fallbackModelSelection.instanceId),
+        ...(provider?.supportedRuntimeModes === undefined
+          ? {}
+          : { supportedRuntimeModes: provider.supportedRuntimeModes }),
         isDefault: false,
         isLegacy: model?.isLegacy === true,
         ...(isModelSelectionUnavailable(config, fallbackModelSelection, projectId) ||

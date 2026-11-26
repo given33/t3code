@@ -5,7 +5,12 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { getProviderModelCapabilities } from "./providerModels";
+import {
+  getProviderModelCapabilities,
+  hasRuntimeModelCatalog,
+  isRuntimeModelDefaultAlias,
+  keepsUnavailableModelOptions,
+} from "./providerModels";
 
 const PROVIDER = ProviderDriverKind.make("claudeAgent");
 
@@ -29,6 +34,14 @@ function model(input: {
     capabilities: input.capabilities,
   };
 }
+
+it("keeps DSH options across catalog refreshes only for concrete routes", () => {
+  const dsh = ProviderDriverKind.make("dsh");
+  expect(hasRuntimeModelCatalog(dsh)).toBe(true);
+  expect(isRuntimeModelDefaultAlias(dsh, "default")).toBe(true);
+  expect(keepsUnavailableModelOptions(dsh, "default")).toBe(false);
+  expect(keepsUnavailableModelOptions(dsh, '["deepseek","deepseek-chat"]')).toBe(true);
+});
 
 describe("getProviderModelCapabilities", () => {
   it("resolves model-declared aliases", () => {

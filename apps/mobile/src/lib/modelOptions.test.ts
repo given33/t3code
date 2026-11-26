@@ -22,6 +22,8 @@ import {
   type ModelOption,
 } from "./modelOptions";
 import { groupModelsBySubProvider } from "@t3tools/client-runtime/providerSubProviders";
+import { runtimeModeChoicesForSupportedModes } from "../features/threads/thread-settings-options";
+import { resolveProviderOptionDescriptors } from "./providerOptions";
 
 describe("mobile model options", () => {
   it("distinguishes same-name OpenCode models without changing their routing", () => {
@@ -114,6 +116,113 @@ describe("mobile model options", () => {
       ["Codex subscription", 1],
       ["Grok subscription", 0],
     ]);
+  });
+
+  describe("DSH model picker", () => {
+    const instanceId = ProviderInstanceId.make("dsh-work");
+    const apiModel = '["deepseek-official","deepseek-v4-flash"]';
+    const otherModel = '["pixel","deepseek-v4-flash"]';
+    const supportedRuntimeModes = ["approval-required", "full-access"] as const;
+    const capabilities = {
+      optionDescriptors: [
+        {
+          id: "reasoning_effort",
+          label: "Reasoning",
+          type: "select",
+          currentValue: "low",
+          options: [
+            { id: "low", label: "Low" },
+            { id: "high", label: "High" },
+          ],
+        },
+      ],
+    };
+    const config = {
+      providers: [
+        {
+          instanceId,
+          driver: "dsh",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          supportedRuntimeModes,
+          subProviders: [{ name: "DeepSeek API" }, { name: "Pixel" }],
+          models: [
+            { slug: "default", name: "Harness default", isCustom: false, capabilities },
+            {
+              slug: apiModel,
+              name: "Flash",
+              subProvider: "DeepSeek API",
+              isDefault: true,
+              isCustom: false,
+              capabilities,
+            },
+            {
+              slug: otherModel,
+              name: "Flash",
+              subProvider: "Pixel",
+              isCustom: false,
+              capabilities: null,
+            },
+          ],
+        },
+      ],
+    } as unknown as ServerConfig;
+
+    it("groups routes by vendor, keeping the default alias and its selected reasoning effort", () => {
+      const selection = {
+        instanceId,
+        model: "default",
+        options: [{ id: "reasoning_effort", value: "high" }],
+      };
+      const [group] = groupByProvider(buildModelOptions(config, selection, instanceId, null));
+      expect(group?.providerLabel).toBe("DeepSeek Harness");
+      const { ungrouped, groups } = groupModelsBySubProvider(
+        group!.models,
+        group!.subProviders ?? [],
+        (option) => option.subtitle,
+      );
+      expect(
+        groups.map(({ subProvider, models }) => [
+          subProvider.name,
+          models.map((option) => option.selection.model),
+        ]),
+      ).toEqual([
+        ["DeepSeek API", [apiModel]],
+        ["Pixel", [otherModel]],
+      ]);
+      expect(ungrouped.map((option) => option.selection)).toEqual([selection]);
+      expect(isModelSelectionUnavailable(config, selection, null)).toBe(false);
+      const [alias] = ungrouped;
+      expect(
+        resolveProviderOptionDescriptors({
+          capabilities: alias!.capabilities,
+          selections: alias!.selection.options,
+        }),
+      ).toMatchObject([
+        {
+          id: "reasoning_effort",
+          type: "select",
+          currentValue: "high",
+          options: [{ id: "low" }, { id: "high" }],
+        },
+      ]);
+      expect(
+        runtimeModeChoicesForSupportedModes(alias!.supportedRuntimeModes).map(({ mode }) => mode),
+      ).toEqual(supportedRuntimeModes);
+    });
+
+    it("keeps the provider's runtime modes when a refresh omits the selected route", () => {
+      const selection = { instanceId, model: '["pixel","temporarily-missing"]' };
+      const fallback = buildModelOptions(config, selection, instanceId, null).find(
+        (option) => option.selection.model === selection.model,
+      );
+      expect(
+        runtimeModeChoicesForSupportedModes(fallback?.supportedRuntimeModes).map(
+          ({ mode }) => mode,
+        ),
+      ).toEqual(supportedRuntimeModes);
+    });
   });
 
   it("does not materialize catalog defaults for missing stored options", () => {

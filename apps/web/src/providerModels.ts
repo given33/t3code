@@ -17,6 +17,7 @@ const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
 const RUNTIME_MODEL_CATALOG_DRIVERS: ReadonlySet<string> = new Set([
   "opencode",
   "antigravity",
+  "dsh",
   "cursor",
   "pi",
   "acpRegistry",
@@ -33,7 +34,7 @@ export function isRuntimeModelDefaultAlias(
   model: string | null | undefined,
 ): boolean {
   return (
-    (provider === "antigravity" || provider === "acpRegistry") &&
+    (provider === "antigravity" || provider === "acpRegistry" || provider === "dsh") &&
     model === DEFAULT_MODEL_BY_PROVIDER[provider]
   );
 }

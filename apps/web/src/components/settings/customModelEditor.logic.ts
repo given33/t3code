@@ -92,6 +92,14 @@ export const DESCRIPTOR_PRESETS_BY_KIND: Partial<
     { id: "fastMode", label: msg("Fast Mode", { $context: "model option name" }), type: "boolean" },
     { id: "thinking", label: msg("Thinking", { $context: "model option name" }), type: "boolean" },
   ],
+  [ProviderDriverKind.make("dsh")]: [
+    {
+      id: "reasoning_effort",
+      label: msg("Reasoning", { $context: "model option name" }),
+      type: "select",
+      choices: EFFORT_CHOICES,
+    },
+  ],
   [ProviderDriverKind.make("grok")]: [
     {
       id: "reasoningEffort",
